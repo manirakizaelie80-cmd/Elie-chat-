@@ -1,0 +1,12 @@
+{
+  "name": "Elie chat ",
+  "description": "Elie chat connect people in different location of world ",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

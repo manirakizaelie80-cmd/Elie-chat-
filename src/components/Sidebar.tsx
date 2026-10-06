@@ -10,7 +10,9 @@ import {
   Radio, 
   Sparkles, 
   CircleDot, 
-  Headphones 
+  Headphones,
+  Users,
+  Trash2
 } from 'lucide-react';
 import { Room, User, ActiveCall } from '../types';
 
@@ -26,6 +28,7 @@ interface SidebarProps {
   onStart1on1Call: (targetUser: User, type: 'audio' | 'video') => void;
   onJoinRoomCall: (room: Room) => void;
   onCreateChannelClick: () => void;
+  onDeleteRoom?: (roomId: string) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -40,6 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onStart1on1Call,
   onJoinRoomCall,
   onCreateChannelClick,
+  onDeleteRoom,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -122,49 +126,84 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div>
           <div className="flex items-center justify-between px-2 mb-1.5">
             <span className="text-[11px] font-semibold tracking-wider uppercase text-slate-400">
-              Group Rooms & Stages
+              Channels & Groups
             </span>
             <button
               onClick={onCreateChannelClick}
-              title="Create new room"
-              className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-slate-200 transition-colors"
+              title="Create channel or custom group"
+              className="flex items-center gap-1 px-1.5 py-0.5 hover:bg-slate-800 rounded text-xs text-blue-400 hover:text-blue-300 font-medium transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
+              <span className="text-[10px]">New</span>
             </button>
           </div>
 
           <div className="space-y-0.5">
-            {filteredRooms.map((room) => {
-              const isSelected = activeRoomId === room.id && activeDirectUserId === null;
-              const hasCall = Boolean(room.activeCall);
+            {filteredRooms.length === 0 ? (
+              <div className="px-2.5 py-2 text-center text-xs text-slate-500">
+                No rooms match search
+              </div>
+            ) : (
+              filteredRooms.map((room) => {
+                const isSelected = activeRoomId === room.id && activeDirectUserId === null;
+                const hasCall = Boolean(room.activeCall);
+                const isCreator = room.createdById === currentUserId;
 
-              return (
-                <button
-                  key={room.id}
-                  onClick={() => onSelectRoom(room.id)}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors group ${
-                    isSelected
-                      ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
-                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    {room.type === 'voice-video' ? (
-                      <Video className={`w-3.5 h-3.5 shrink-0 ${hasCall ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
-                    ) : (
-                      <Hash className="w-3.5 h-3.5 shrink-0 text-slate-400" />
-                    )}
-                    <span className="truncate">{room.name}</span>
+                return (
+                  <div
+                    key={room.id}
+                    onClick={() => onSelectRoom(room.id)}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-colors group ${
+                      isSelected
+                        ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 truncate flex-1 min-w-0">
+                      {room.icon ? (
+                        <span className="text-xs shrink-0">{room.icon}</span>
+                      ) : room.isCustomGroup ? (
+                        <Users className="w-3.5 h-3.5 shrink-0 text-purple-400" />
+                      ) : room.type === 'voice-video' ? (
+                        <Video className={`w-3.5 h-3.5 shrink-0 ${hasCall ? 'text-emerald-400 animate-pulse' : 'text-slate-400'}`} />
+                      ) : (
+                        <Hash className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                      )}
+                      <span className="truncate">{room.name}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0 ml-1.5">
+                      {room.isCustomGroup && (
+                        <span className="text-[9px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 font-semibold border border-purple-500/30">
+                          Group
+                        </span>
+                      )}
+
+                      {hasCall && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+                          LIVE
+                        </span>
+                      )}
+
+                      {isCreator && onDeleteRoom && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (window.confirm(`Delete "${room.name}"?`)) {
+                              onDeleteRoom(room.id);
+                            }
+                          }}
+                          title="Delete room"
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded text-slate-500 hover:text-red-400 transition-all"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
-
-                  {hasCall && (
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
-                      LIVE
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
 

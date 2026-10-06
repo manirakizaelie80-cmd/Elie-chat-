@@ -1,0 +1,130 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Information and real-time presence of Elie Chat users around the world.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique user ID",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the user",
+          "maxLength": 100
+        },
+        "avatar": {
+          "type": "string",
+          "description": "Avatar image URL or path",
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "description": "Real-time presence status",
+          "enum": ["online", "away", "busy", "in-call"]
+        },
+        "customStatus": {
+          "type": "string",
+          "description": "Custom status tagline (e.g. role and location)",
+          "maxLength": 150
+        },
+        "peerId": {
+          "type": "string",
+          "description": "Dynamic registered PeerJS ID for direct WebRTC signaling",
+          "maxLength": 150
+        },
+        "lastActive": {
+          "type": "number",
+          "description": "Timestamp in milliseconds of last heartbeat"
+        },
+        "location": {
+          "type": "object",
+          "description": "Geographical location coordinates and country flag",
+          "properties": {
+            "city": { "type": "string", "maxLength": 100 },
+            "country": { "type": "string", "maxLength": 100 },
+            "flag": { "type": "string", "maxLength": 10 },
+            "timezone": { "type": "string", "maxLength": 50 },
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        }
+      },
+      "required": ["id", "name", "status"]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "User-created group and channel rooms for text chat or live voice/video stages.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique room/channel ID",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "name": {
+          "type": "string",
+          "description": "Channel or group display name",
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "description": "Purpose and description of the channel/group",
+          "maxLength": 500
+        },
+        "type": {
+          "type": "string",
+          "description": "Room medium type",
+          "enum": ["text", "voice-video"]
+        },
+        "createdById": {
+          "type": "string",
+          "description": "ID of user who created the channel",
+          "maxLength": 128
+        },
+        "createdByName": {
+          "type": "string",
+          "description": "Name of user who created the channel",
+          "maxLength": 100
+        },
+        "category": {
+          "type": "string",
+          "description": "Topic category of the room",
+          "maxLength": 50
+        },
+        "icon": {
+          "type": "string",
+          "description": "Emoji or icon for the room",
+          "maxLength": 10
+        },
+        "isCustomGroup": {
+          "type": "boolean",
+          "description": "Whether this is a user-created custom group"
+        },
+        "memberIds": {
+          "type": "array",
+          "description": "List of user IDs who are members of this group"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Creation timestamp in milliseconds"
+        }
+      },
+      "required": ["id", "name", "type", "createdById", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Public directory of Elie Chat users, real-time presence and locations across the globe"
+    },
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Public and user-created channels and group rooms for global chat and calling"
+    }
+  }
+}

@@ -20,11 +20,12 @@ import {
 } from 'lucide-react';
 import { ActiveCall, CallParticipant, User, Message } from '../types';
 import { WebRTCManager } from '../utils/webrtcManager';
+import { PeerMeshManager } from '../utils/peerMesh';
 
 interface ActiveCallModalProps {
   call: ActiveCall;
   currentUser: User;
-  webrtcManager: WebRTCManager | null;
+  webrtcManager: WebRTCManager | PeerMeshManager | null;
   remoteStreams: Map<string, MediaStream>;
   speakingPeers: Record<string, boolean>;
   onEndCall: () => void;

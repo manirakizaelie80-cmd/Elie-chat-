@@ -44,7 +44,12 @@ export interface Room {
   description: string;
   type: 'text' | 'voice-video';
   createdById: string;
+  createdByName?: string;
   createdAt: number;
+  category?: string;
+  icon?: string;
+  isCustomGroup?: boolean;
+  memberIds?: string[];
   activeCall?: {
     callId: string;
     callType: 'audio' | 'video';

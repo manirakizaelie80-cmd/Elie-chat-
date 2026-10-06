@@ -15,7 +15,8 @@ import {
   Image as ImageIcon,
   Users,
   Radio,
-  Sparkles
+  Sparkles,
+  Trash2
 } from 'lucide-react';
 import { Message, User, Room } from '../types';
 
@@ -37,6 +38,7 @@ interface ChatAreaProps {
   onSendTyping: (isTyping: boolean) => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onJoinRoomCall?: () => void;
+  onDeleteRoom?: (roomId: string) => void;
 }
 
 const COMMON_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🚀', '👀'];
@@ -52,6 +54,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSendTyping,
   onStartCall,
   onJoinRoomCall,
+  onDeleteRoom,
 }) => {
   const [inputText, setInputText] = useState('');
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -227,7 +230,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div className="flex items-center gap-3 truncate">
           {isRoom ? (
             <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold text-sm shrink-0 border border-blue-500/30">
-              #
+              {currentRoom?.icon ? (
+                <span>{currentRoom.icon}</span>
+              ) : currentRoom?.isCustomGroup ? (
+                <Users className="w-4 h-4 text-purple-400" />
+              ) : currentRoom?.type === 'voice-video' ? (
+                <Video className="w-4 h-4 text-emerald-400" />
+              ) : (
+                '#'
+              )}
             </div>
           ) : directUser?.avatar ? (
             <img
@@ -243,18 +254,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
 
           <div className="truncate">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 truncate">
               <h2 className="text-sm font-semibold text-white tracking-tight truncate">
                 {targetTitle}
               </h2>
+              {isRoom && currentRoom?.isCustomGroup && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-semibold border border-purple-500/30 shrink-0">
+                  Custom Group
+                </span>
+              )}
+              {isRoom && currentRoom?.category && (
+                <span className="text-[10px] text-slate-400 hidden sm:inline shrink-0">
+                  • {currentRoom.category}
+                </span>
+              )}
               {!isRoom && directUser?.location && (
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-400 shrink-0">
                   {directUser.location.flag} {directUser.location.city}
                 </span>
               )}
             </div>
             <div className="text-[11px] text-slate-400 truncate flex items-center gap-1.5">
-              <span>{targetDesc}</span>
+              <span className="truncate">{targetDesc}</span>
+              {isRoom && currentRoom?.memberIds && currentRoom.memberIds.length > 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="text-purple-400 shrink-0">{currentRoom.memberIds.length} members</span>
+                </>
+              )}
               {!isRoom && directUser?.location && (
                 <>
                   <span aria-hidden="true">·</span>
@@ -279,8 +306,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* Action Buttons: Voice / Video Call */}
-        <div className="flex items-center gap-2">
+        {/* Action Buttons: Voice / Video Call & Delete if Creator */}
+        <div className="flex items-center gap-2 shrink-0">
+          {isRoom && currentRoom && currentRoom.createdById === currentUser.id && onDeleteRoom && (
+            <button
+              onClick={() => {
+                if (window.confirm(`Delete "${currentRoom.name}"?`)) {
+                  onDeleteRoom(currentRoom.id);
+                }
+              }}
+              title="Delete room"
+              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-red-500/20 text-slate-400 hover:text-red-400 border border-slate-700/60 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           {isRoom && currentRoom?.activeCall ? (
             <button
               onClick={onJoinRoomCall}

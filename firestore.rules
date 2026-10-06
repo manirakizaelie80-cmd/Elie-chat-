@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'status'])
+        && data.id is string && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.status in ['online', 'away', 'busy', 'in-call']
+        && (!('customStatus' in data) || (data.customStatus is string && data.customStatus.size() <= 150))
+        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 500))
+        && (!('peerId' in data) || (data.peerId is string && data.peerId.size() <= 150))
+        && (!('lastActive' in data) || data.lastActive is number);
+    }
+
+    function isValidRoom(data) {
+      return data.keys().hasAll(['id', 'name', 'type', 'createdById', 'createdAt'])
+        && data.id is string && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.type in ['text', 'voice-video']
+        && data.createdById is string && data.createdById.size() <= 128
+        && data.createdAt is number
+        && (!('description' in data) || (data.description is string && data.description.size() <= 500))
+        && (!('createdByName' in data) || (data.createdByName is string && data.createdByName.size() <= 100))
+        && (!('category' in data) || (data.category is string && data.category.size() <= 50))
+        && (!('icon' in data) || (data.icon is string && data.icon.size() <= 10))
+        && (!('isCustomGroup' in data) || data.isCustomGroup is bool);
+    }
+
+    // Public user directory for Elie Chat global presence & location discovery
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if isValidId(userId) && isValidUser(request.resource.data) && request.resource.data.id == userId;
+      allow delete: if false;
+    }
+
+    // Public & user-created channels and groups
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow create: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId;
+      allow update: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId;
+      allow delete: if isValidId(roomId);
+    }
+  }
+}

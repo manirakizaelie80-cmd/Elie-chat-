@@ -9,8 +9,10 @@ import { UserProfileModal } from './components/UserProfileModal';
 import { CreateChannelModal } from './components/CreateChannelModal';
 import { MultiTabHelperModal } from './components/MultiTabHelperModal';
 import { User, Room, Message, ActiveCall, ViewTab } from './types';
-import { WebRTCManager } from './utils/webrtcManager';
+import { PeerMeshManager } from './utils/peerMesh';
 import { getUserMediaSafe } from './utils/mediaFallback';
+import { saveUserRealtime, subscribeUsersRealtime } from './utils/userSync';
+import { saveRoomRealtime, deleteRoomRealtime, subscribeRoomsRealtime } from './utils/roomSync';
 import { 
   playCallingRing, 
   playCallConnected, 
@@ -18,6 +20,88 @@ import {
   playMessageNotification, 
   stopRingtone 
 } from './utils/audioSynth';
+
+const DEFAULT_ROOMS: Room[] = [
+  {
+    id: 'global-connect',
+    name: 'Elie Chat Global Hub',
+    description: 'Connecting people across all continents. Live chat, culture exchange, and cross-border syncs.',
+    type: 'text',
+    createdById: 'user-elie',
+    createdAt: Date.now() - 3600000 * 24,
+  },
+  {
+    id: 'world-video-stage',
+    name: 'World Video Stage 🌍',
+    description: '24/7 Live multi-user video stage bridging Kigali, New York, Berlin, Tokyo & worldwide.',
+    type: 'voice-video',
+    createdById: 'user-elie',
+    createdAt: Date.now() - 3600000 * 24,
+  },
+  {
+    id: 'kigali-africa',
+    name: 'Kigali & Pan-Africa Hub',
+    description: 'Rwanda, East Africa, and pan-African technology & culture connection.',
+    type: 'text',
+    createdById: 'user-elie',
+    createdAt: Date.now() - 3600000 * 20,
+  },
+  {
+    id: 'global-voice-lounge',
+    name: 'Global Voice Lounge 🎙️',
+    description: 'Drop-in worldwide audio room. Hear voices from different continents in real time.',
+    type: 'voice-video',
+    createdById: 'user-elie',
+    createdAt: Date.now() - 3600000 * 18,
+  },
+];
+
+const INITIAL_MESSAGES: Message[] = [
+  {
+    id: 'm-init-1',
+    targetId: 'global-connect',
+    isGroup: true,
+    senderId: 'user-elie',
+    senderName: 'Elie Manirakiza',
+    senderAvatar: '/src/assets/images/avatar_elie_1790670827487.jpg',
+    text: 'Muraho and welcome to Elie Chat! 🌍 We connect people living in different locations across the globe with serverless P2P messaging, crisp voice calls, and multi-user video stages powered by public PeerJS cloud signaling.',
+    reactions: { '❤️': ['user-elie'], '🌍': ['user-elie'] },
+    timestamp: Date.now() - 3600000 * 3,
+  },
+  {
+    id: 'm-init-2',
+    targetId: 'global-connect',
+    isGroup: true,
+    senderId: 'user-elena',
+    senderName: 'Elena Rostova',
+    senderAvatar: '/src/assets/images/avatar_tech_lead_1790668646558.jpg',
+    text: 'Greetings from Berlin, Germany! 🇩🇪 Even across 6,000+ kilometers, peer-to-peer WebRTC connections are direct, private, and ultra low latency.',
+    reactions: { '⚡': ['user-elie'] },
+    timestamp: Date.now() - 3600000 * 2,
+  },
+  {
+    id: 'm-init-3',
+    targetId: 'global-connect',
+    isGroup: true,
+    senderId: 'user-marcus',
+    senderName: 'Marcus Vance',
+    senderAvatar: '/src/assets/images/avatar_designer_1790668663121.jpg',
+    text: 'Good morning from New York, USA! 🇺🇸 Check out the World Map tab at the top or open another tab as a test peer to see direct P2P discovery in action!',
+    reactions: { '🚀': ['user-elie'] },
+    timestamp: Date.now() - 3600000 * 1,
+  },
+  {
+    id: 'm-init-4',
+    targetId: 'world-video-stage',
+    isGroup: true,
+    senderId: 'user-elie',
+    senderName: 'Elie Manirakiza',
+    senderAvatar: '/src/assets/images/avatar_elie_1790670827487.jpg',
+    text: 'Jump into the World Video Stage above to experience live group video conference with participants anywhere in the world!',
+    reactions: { '🎥': ['user-marcus'] },
+    timestamp: Date.now() - 3600000 * 1,
+  },
+];
 
 export default function App() {
   // 1. Identify User Session
@@ -82,7 +166,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.location) return parsed;
+        if (parsed.location && parsed.id) return parsed;
       } catch (e) {
         // ignore
       }
@@ -112,11 +196,12 @@ export default function App() {
     localStorage.setItem('syncwave_current_user', JSON.stringify(currentUser));
   }, [currentUser]);
 
-  // App State
+  // App State: users initialized with currentUser
   const [isConnected, setIsConnected] = useState(false);
-  const [users, setUsers] = useState<User[]>([]);
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [selfPeerId, setSelfPeerId] = useState<string>('');
+  const [users, setUsers] = useState<User[]>(() => [currentUser]);
+  const [rooms, setRooms] = useState<Room[]>(DEFAULT_ROOMS);
+  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
 
   // Navigation State
@@ -138,6 +223,7 @@ export default function App() {
     callType: 'audio' | 'video';
     caller: { id: string; name: string; avatar?: string };
     isGroup: boolean;
+    targetId: string;
   } | null>(null);
 
   // Current Active Call
@@ -148,199 +234,14 @@ export default function App() {
   const [remoteStreams, setRemoteStreams] = useState<Map<string, MediaStream>>(new Map());
   const [speakingPeers, setSpeakingPeers] = useState<Record<string, boolean>>({});
 
-  // WebSocket Ref
-  const wsRef = useRef<WebSocket | null>(null);
-  const webrtcManagerRef = useRef<WebRTCManager | null>(null);
-
-  // WebSocket Connection
-  useEffect(() => {
-    let reconnectTimeout: any = null;
-
-    const connectWs = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        setIsConnected(true);
-        // Identify ourselves
-        ws.send(
-          JSON.stringify({
-            type: 'identify',
-            user: currentUser,
-          })
-        );
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          switch (data.type) {
-            case 'init_sync': {
-              setUsers(data.users || []);
-              setRooms(data.rooms || []);
-              setMessages(data.messages || []);
-              setActiveCalls(data.activeCalls || []);
-              break;
-            }
-
-            case 'presence:update': {
-              setUsers((prev) => {
-                const idx = prev.findIndex((u) => u.id === data.user.id);
-                if (idx > -1) {
-                  const updated = [...prev];
-                  updated[idx] = data.user;
-                  return updated;
-                }
-                return [...prev, data.user];
-              });
-              break;
-            }
-
-            case 'presence:user_left': {
-              setUsers((prev) => prev.filter((u) => u.id !== data.userId));
-              break;
-            }
-
-            case 'chat:new_message': {
-              setMessages((prev) => {
-                if (prev.some((m) => m.id === data.message.id)) return prev;
-                return [...prev, data.message];
-              });
-
-              if (data.message.senderId !== currentUser.id) {
-                playMessageNotification();
-              }
-              break;
-            }
-
-            case 'chat:reaction_updated': {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === data.messageId ? { ...m, reactions: data.reactions } : m
-                )
-              );
-              break;
-            }
-
-            case 'chat:user_typing': {
-              if (data.isTyping) {
-                setTypingUsers((prev) => {
-                  if (prev.some((t) => t.userId === data.userId && t.targetId === data.targetId)) return prev;
-                  return [...prev, { userId: data.userId, userName: data.userName, targetId: data.targetId }];
-                });
-              } else {
-                setTypingUsers((prev) =>
-                  prev.filter((t) => !(t.userId === data.userId && t.targetId === data.targetId))
-                );
-              }
-              break;
-            }
-
-            case 'room:created': {
-              setRooms((prev) => {
-                if (prev.some((r) => r.id === data.room.id)) return prev;
-                return [...prev, data.room];
-              });
-              break;
-            }
-
-            case 'calls:updated': {
-              setActiveCalls(data.activeCalls || []);
-              // If current call is in progress, update its participant info
-              setCurrentCall((current) => {
-                if (!current) return null;
-                const match = (data.activeCalls as ActiveCall[]).find(
-                  (c) => c.callId === current.callId
-                );
-                return match || current;
-              });
-              break;
-            }
-
-            // ============ WEBRTC & CALL SIGNALING ============
-            case 'call:incoming': {
-              setIncomingCallData({
-                callId: data.callId,
-                callType: data.callType,
-                caller: data.caller,
-                isGroup: data.isGroup,
-              });
-              break;
-            }
-
-            case 'call:participant_joined': {
-              const { callId, participant } = data;
-              if (currentCall && currentCall.callId === callId && participant.userId !== currentUser.id) {
-                // We initiate connection to the new participant
-                webrtcManagerRef.current?.initiateConnectionTo(participant.userId);
-              }
-              break;
-            }
-
-            case 'call:participant_left': {
-              const { userId } = data;
-              webrtcManagerRef.current?.removePeer(userId);
-              setRemoteStreams((prev) => {
-                const updated = new Map(prev);
-                updated.delete(userId);
-                return updated;
-              });
-              break;
-            }
-
-            case 'call:signal': {
-              const { fromPeerId, signal } = data;
-              webrtcManagerRef.current?.handleSignal(fromPeerId, signal);
-              break;
-            }
-
-            case 'call:rejected': {
-              stopRingtone();
-              alert(`Call was declined.`);
-              endCallCleanup();
-              break;
-            }
-
-            case 'call:ended': {
-              if (currentCall && currentCall.callId === data.callId) {
-                playCallEnded();
-                endCallCleanup();
-              }
-              break;
-            }
-          }
-        } catch (err) {
-          console.error('Error parsing WS message:', err);
-        }
-      };
-
-      ws.onclose = () => {
-        setIsConnected(false);
-        reconnectTimeout = setTimeout(connectWs, 2000);
-      };
-
-      ws.onerror = (err) => {
-        console.warn('WS error:', err);
-      };
-    };
-
-    connectWs();
-
-    return () => {
-      if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      wsRef.current?.close();
-    };
-  }, [currentUser.id]);
+  // P2P PeerJS Mesh Manager Ref
+  const peerMeshRef = useRef<PeerMeshManager | null>(null);
 
   // Clean up call
   const endCallCleanup = useCallback(() => {
     stopRingtone();
-    if (webrtcManagerRef.current) {
-      webrtcManagerRef.current.destroy();
-      webrtcManagerRef.current = null;
+    if (peerMeshRef.current && currentCall) {
+      peerMeshRef.current.endCall(currentCall.callId);
     }
     setRemoteStreams(new Map());
     setSpeakingPeers({});
@@ -348,44 +249,310 @@ export default function App() {
     setIsScreenSharing(false);
     setIsMuted(false);
     setIsCameraOff(false);
-  }, []);
+  }, [currentCall]);
 
-  // Initialize WebRTC Manager helper
-  const initWebRTCManager = useCallback((callId: string) => {
-    if (webrtcManagerRef.current) {
-      webrtcManagerRef.current.destroy();
-    }
+  // Initialize PeerJS Mesh Manager with public PeerJS cloud server (new Peer())
+  useEffect(() => {
+    const mesh = new PeerMeshManager(currentUser, {
+      onSelfPeerId: (peerId) => {
+        setSelfPeerId(peerId);
+        setIsConnected(true);
+      },
 
-    const manager = new WebRTCManager({
-      sendSignal: (toPeerId, signal) => {
-        wsRef.current?.send(
-          JSON.stringify({
-            type: 'call:signal',
-            callId,
-            toPeerId,
-            fromPeerId: currentUser.id,
-            signal,
-          })
+      onUserJoined: (user) => {
+        // When another user connects, add them to users state
+        setUsers((prev) => {
+          const map = new Map<string, User>();
+          for (const u of prev) {
+            map.set(u.id, u);
+          }
+          map.set(user.id, {
+            ...user,
+            status: 'online',
+          });
+          map.set(currentUser.id, currentUser);
+          return Array.from(map.values());
+        });
+      },
+
+      onUserLeft: (userId) => {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === userId ? { ...u, status: 'away' } : u))
         );
       },
+
+      onUsersSync: (syncedUsers) => {
+        // Update user state so another user is shown as online
+        setUsers(() => {
+          const map = new Map<string, User>();
+          map.set(currentUser.id, currentUser);
+          for (const u of syncedUsers) {
+            if (u.id !== currentUser.id) {
+              map.set(u.id, {
+                ...u,
+                status: 'online',
+              });
+            }
+          }
+          return Array.from(map.values());
+        });
+      },
+
+      onNewMessage: (msg) => {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          return [...prev, msg];
+        });
+
+        if (msg.senderId !== currentUser.id) {
+          playMessageNotification();
+        }
+      },
+
+      onReactionUpdated: (messageId, reactions) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
+        );
+      },
+
+      onTyping: (userId, userName, targetId, isTyping) => {
+        if (isTyping) {
+          setTypingUsers((prev) => {
+            if (prev.some((t) => t.userId === userId && t.targetId === targetId)) return prev;
+            return [...prev, { userId, userName, targetId }];
+          });
+        } else {
+          setTypingUsers((prev) =>
+            prev.filter((t) => !(t.userId === userId && t.targetId === targetId))
+          );
+        }
+      },
+
+      onIncomingCall: (callData) => {
+        playCallingRing();
+        setIncomingCallData({
+          callId: callData.callId,
+          callType: callData.callType,
+          caller: callData.caller,
+          isGroup: callData.isGroup,
+          targetId: callData.targetId,
+        });
+      },
+
+      onCallAccepted: () => {
+        stopRingtone();
+        playCallConnected();
+      },
+
+      onCallRejected: () => {
+        stopRingtone();
+        endCallCleanup();
+      },
+
+      onCallParticipantJoined: (callId, participant) => {
+        setCurrentCall((curr) => {
+          if (!curr || curr.callId !== callId) return curr;
+          const exists = curr.participants.some((p) => p.userId === participant.userId);
+          if (exists) return curr;
+          return {
+            ...curr,
+            participants: [...curr.participants, participant],
+          };
+        });
+      },
+
+      onCallParticipantLeft: (callId, userId) => {
+        setCurrentCall((curr) => {
+          if (!curr || curr.callId !== callId) return curr;
+          return {
+            ...curr,
+            participants: curr.participants.filter((p) => p.userId !== userId),
+          };
+        });
+        setRemoteStreams((prev) => {
+          const next = new Map(prev);
+          next.delete(userId);
+          return next;
+        });
+      },
+
+      onCallParticipantStatus: (callId, userId, status) => {
+        setCurrentCall((curr) => {
+          if (!curr || curr.callId !== callId) return curr;
+          return {
+            ...curr,
+            participants: curr.participants.map((p) =>
+              p.userId === userId ? { ...p, ...status } : p
+            ),
+          };
+        });
+      },
+
+      onCallEnded: (callId) => {
+        if (currentCall && currentCall.callId === callId) {
+          playCallEnded();
+          endCallCleanup();
+        }
+      },
+
       onRemoteStream: (peerId, stream) => {
         setRemoteStreams((prev) => new Map(prev).set(peerId, stream));
       },
-      onRemoteLeave: (peerId) => {
+
+      onRemoteStreamRemoved: (peerId) => {
         setRemoteStreams((prev) => {
           const next = new Map(prev);
           next.delete(peerId);
           return next;
         });
       },
-      onPeerSpeaking: (peerId, { isSpeaking }) => {
-        setSpeakingPeers((prev) => ({ ...prev, [peerId]: Boolean(isSpeaking) }));
+
+      onPeerSpeaking: (peerId, isSpeaking) => {
+        setSpeakingPeers((prev) => ({ ...prev, [peerId]: isSpeaking }));
+      },
+
+      onRoomCreated: (newRoom) => {
+        setRooms((prev) => {
+          if (prev.some((r) => r.id === newRoom.id)) return prev;
+          return [...prev, newRoom];
+        });
       },
     });
 
-    webrtcManagerRef.current = manager;
-    return manager;
+    peerMeshRef.current = mesh;
+
+    return () => {
+      mesh.destroy();
+      peerMeshRef.current = null;
+    };
   }, [currentUser.id]);
+
+  // Real-Time Firestore Persistence: Save user information to Firestore in real time
+  useEffect(() => {
+    saveUserRealtime(currentUser, selfPeerId).catch(console.error);
+
+    // Periodic heartbeat to Firestore every 25 seconds
+    const interval = setInterval(() => {
+      saveUserRealtime(currentUser, selfPeerId).catch(console.error);
+    }, 25000);
+
+    const handleBeforeUnload = () => {
+      saveUserRealtime({ ...currentUser, status: 'away' }, selfPeerId);
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [currentUser, selfPeerId]);
+
+  // Real-Time Firestore Subscription: Listen to all users saved in the cloud in real time
+  useEffect(() => {
+    const unsubscribe = subscribeUsersRealtime((firestoreUsers) => {
+      setUsers((prev) => {
+        const map = new Map<string, User>();
+        // Always include currentUser
+        map.set(currentUser.id, currentUser);
+
+        // Include all users from Firestore
+        for (const u of firestoreUsers) {
+          if (u.id === currentUser.id) continue;
+          const isRecentlyActive = Date.now() - (u.lastActive || 0) < 90000;
+          map.set(u.id, {
+            ...u,
+            status: isRecentlyActive ? (u.status || 'online') : 'away',
+          });
+
+          // If they have a registered PeerJS ID, auto-connect via WebRTC mesh
+          const userWithPeerId = u as any;
+          if (userWithPeerId.peerId && userWithPeerId.peerId !== selfPeerId) {
+            peerMeshRef.current?.connectToPeer(userWithPeerId.peerId, u);
+          }
+        }
+
+        // Merge any peers already connected via WebRTC
+        for (const p of prev) {
+          if (!map.has(p.id)) {
+            map.set(p.id, p);
+          }
+        }
+
+        return Array.from(map.values());
+      });
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentUser.id, selfPeerId]);
+
+  // Real-Time Firestore Subscription: Listen to all channels & groups in the cloud in real time
+  useEffect(() => {
+    const unsubscribe = subscribeRoomsRealtime((firestoreRooms) => {
+      setRooms((prev) => {
+        if (firestoreRooms.length === 0) {
+          // Seed default rooms to Firestore if empty
+          DEFAULT_ROOMS.forEach((r) => saveRoomRealtime(r).catch(console.error));
+          return DEFAULT_ROOMS;
+        }
+        // Merge default rooms with user-created channels and custom groups
+        const map = new Map<string, Room>();
+        DEFAULT_ROOMS.forEach((r) => map.set(r.id, r));
+        firestoreRooms.forEach((r) => map.set(r.id, r));
+        return Array.from(map.values());
+      });
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Handle Creating a Custom Group or Channel
+  const handleCreateRoom = async (roomData: {
+    name: string;
+    description: string;
+    type: 'text' | 'voice-video';
+    isCustomGroup: boolean;
+    icon?: string;
+    category?: string;
+    memberIds?: string[];
+  }) => {
+    const newRoom: Room = {
+      id: `room-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      name: roomData.name,
+      description: roomData.description,
+      type: roomData.type,
+      isCustomGroup: roomData.isCustomGroup,
+      icon: roomData.icon,
+      category: roomData.category,
+      memberIds: roomData.memberIds,
+      createdById: currentUser.id,
+      createdByName: currentUser.name,
+      createdAt: Date.now(),
+    };
+
+    // Optimistically add to state and switch to new room
+    setRooms((prev) => [...prev.filter((r) => r.id !== newRoom.id), newRoom]);
+    setActiveRoomId(newRoom.id);
+    setActiveDirectUserId(null);
+
+    // Persist to Firestore in real time
+    await saveRoomRealtime(newRoom).catch(console.error);
+
+    // Announce to P2P mesh
+    peerMeshRef.current?.createRoom(newRoom);
+  };
+
+  // Handle Deleting a Room / Group
+  const handleDeleteRoom = async (roomId: string) => {
+    setRooms((prev) => prev.filter((r) => r.id !== roomId));
+    if (activeRoomId === roomId) {
+      setActiveRoomId('global-connect');
+    }
+    await deleteRoomRealtime(roomId).catch(console.error);
+  };
 
   // Handle Starting a Call (1-on-1 or Group)
   const handleStartCall = async (type: 'audio' | 'video', targetUser?: User, room?: Room) => {
@@ -402,11 +569,10 @@ export default function App() {
       currentUser.name
     );
 
-    const manager = initWebRTCManager(callId);
-    manager.setLocalStream(stream);
-
     setIsCameraOff(type === 'audio');
     setIsMuted(false);
+
+    peerMeshRef.current?.startCall(callId, type, targetId, isGroup, stream);
 
     const initialCall: ActiveCall = {
       callId,
@@ -435,21 +601,6 @@ export default function App() {
     if (!isGroup) {
       playCallingRing();
     }
-
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'call:initiate',
-        callId,
-        callType: type,
-        isGroup,
-        targetId,
-        initiator: {
-          id: currentUser.id,
-          name: currentUser.name,
-          avatar: currentUser.avatar,
-        },
-      })
-    );
   };
 
   // Accept Incoming Call
@@ -466,11 +617,10 @@ export default function App() {
       currentUser.name
     );
 
-    const manager = initWebRTCManager(callId);
-    manager.setLocalStream(stream);
-
     setIsCameraOff(callType === 'audio');
     setIsMuted(false);
+
+    peerMeshRef.current?.acceptCall(callId, stream);
 
     const callObj: ActiveCall = {
       callId,
@@ -506,33 +656,19 @@ export default function App() {
     setCurrentCall(callObj);
     setIncomingCallData(null);
     playCallConnected();
-
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'call:join',
-        callId,
-        user: currentUser,
-      })
-    );
   };
 
   // Decline Incoming Call
   const handleDeclineIncomingCall = () => {
     if (!incomingCallData) return;
     stopRingtone();
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'call:decline',
-        callId: incomingCallData.callId,
-        recipientId: currentUser.id,
-      })
-    );
+    peerMeshRef.current?.rejectCall(incomingCallData.callId, currentUser.id);
     setIncomingCallData(null);
   };
 
   // Join Existing Group Room Call
   const handleJoinRoomCall = async (room: Room) => {
-    const callId = room.activeCall?.callId || `call-${Date.now()}`;
+    const callId = room.activeCall?.callId || `call-${room.id}-${Date.now()}`;
     const callType = room.activeCall?.callType || 'video';
 
     const { stream } = await getUserMediaSafe(
@@ -543,8 +679,10 @@ export default function App() {
       currentUser.name
     );
 
-    const manager = initWebRTCManager(callId);
-    manager.setLocalStream(stream);
+    setIsCameraOff(callType === 'audio');
+    setIsMuted(false);
+
+    peerMeshRef.current?.joinGroupRoomCall(callId, room.id, stream);
 
     const callObj: ActiveCall = {
       callId,
@@ -570,26 +708,12 @@ export default function App() {
 
     setCurrentCall(callObj);
     playCallConnected();
-
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'call:join',
-        callId,
-        user: currentUser,
-      })
-    );
   };
 
   // End / Leave Call
   const handleEndCall = () => {
     if (currentCall) {
-      wsRef.current?.send(
-        JSON.stringify({
-          type: 'call:leave',
-          callId: currentCall.callId,
-          userId: currentUser.id,
-        })
-      );
+      peerMeshRef.current?.endCall(currentCall.callId);
     }
     playCallEnded();
     endCallCleanup();
@@ -598,55 +722,49 @@ export default function App() {
   // Toggle Microphone
   const handleToggleMic = (muted: boolean) => {
     setIsMuted(muted);
-    webrtcManagerRef.current?.setAudioMuted(muted);
+    peerMeshRef.current?.setAudioMuted(muted);
     if (currentCall) {
-      wsRef.current?.send(
-        JSON.stringify({
-          type: 'call:participant_status',
-          callId: currentCall.callId,
-          userId: currentUser.id,
-          isMuted: muted,
-        })
-      );
+      peerMeshRef.current?.broadcastToDataChannels({
+        type: 'call:participant_status',
+        callId: currentCall.callId,
+        userId: currentUser.id,
+        isMuted: muted,
+      });
     }
   };
 
   // Toggle Video
   const handleToggleVideo = (cameraOff: boolean) => {
     setIsCameraOff(cameraOff);
-    webrtcManagerRef.current?.setVideoDisabled(cameraOff);
+    peerMeshRef.current?.setVideoDisabled(cameraOff);
     if (currentCall) {
-      wsRef.current?.send(
-        JSON.stringify({
-          type: 'call:participant_status',
-          callId: currentCall.callId,
-          userId: currentUser.id,
-          isCameraOff: cameraOff,
-        })
-      );
+      peerMeshRef.current?.broadcastToDataChannels({
+        type: 'call:participant_status',
+        callId: currentCall.callId,
+        userId: currentUser.id,
+        isCameraOff: cameraOff,
+      });
     }
   };
 
   // Toggle Screen Sharing
   const handleToggleScreenShare = async (): Promise<boolean> => {
-    if (!webrtcManagerRef.current) return false;
+    if (!peerMeshRef.current) return false;
     if (isScreenSharing) {
-      webrtcManagerRef.current.stopScreenShare();
+      peerMeshRef.current.stopScreenShare();
       setIsScreenSharing(false);
       return false;
     } else {
-      const stream = await webrtcManagerRef.current.startScreenShare();
+      const stream = await peerMeshRef.current.startScreenShare();
       const active = Boolean(stream);
       setIsScreenSharing(active);
       if (currentCall) {
-        wsRef.current?.send(
-          JSON.stringify({
-            type: 'call:participant_status',
-            callId: currentCall.callId,
-            userId: currentUser.id,
-            isScreenSharing: active,
-          })
-        );
+        peerMeshRef.current.broadcastToDataChannels({
+          type: 'call:participant_status',
+          callId: currentCall.callId,
+          userId: currentUser.id,
+          isScreenSharing: active,
+        });
       }
       return active;
     }
@@ -664,32 +782,43 @@ export default function App() {
     const isGroup = activeDirectUserId === null;
     const targetId = isGroup ? activeRoomId! : activeDirectUserId!;
 
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'chat:send',
-        targetId,
-        isGroup,
-        senderId: currentUser.id,
-        senderName: currentUser.name,
-        senderAvatar: currentUser.avatar,
-        text: payload.text,
-        mediaUrl: payload.mediaUrl,
-        mediaType: payload.mediaType,
-        voiceAudio: payload.voiceAudio,
-        voiceDuration: payload.voiceDuration,
-        replyTo: payload.replyTo,
-      })
-    );
+    const newMsg: Message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      targetId,
+      isGroup,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderAvatar: currentUser.avatar,
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaType: payload.mediaType,
+      voiceAudio: payload.voiceAudio,
+      voiceDuration: payload.voiceDuration,
+      replyTo: payload.replyTo,
+      reactions: {},
+      timestamp: Date.now(),
+    };
+
+    setMessages((prev) => [...prev, newMsg]);
+    peerMeshRef.current?.sendMessage(newMsg);
   };
 
   // Send Reaction
   const handleSendReaction = (messageId: string, emoji: string) => {
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'chat:reaction',
-        messageId,
-        emoji,
-        userId: currentUser.id,
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId) return m;
+        const currentUsers = m.reactions[emoji] || [];
+        const hasReacted = currentUsers.includes(currentUser.id);
+        const nextUsers = hasReacted
+          ? currentUsers.filter((id) => id !== currentUser.id)
+          : [...currentUsers, currentUser.id];
+        const nextReactions = { ...m.reactions, [emoji]: nextUsers };
+        if (nextUsers.length === 0) {
+          delete nextReactions[emoji];
+        }
+        peerMeshRef.current?.sendReaction(messageId, nextReactions);
+        return { ...m, reactions: nextReactions };
       })
     );
   };
@@ -698,32 +827,29 @@ export default function App() {
   const handleSendTyping = (isTyping: boolean) => {
     const isGroup = activeDirectUserId === null;
     const targetId = isGroup ? activeRoomId! : activeDirectUserId!;
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'chat:typing',
-        targetId,
-        isGroup,
-        isTyping,
-        userId: currentUser.id,
-        userName: currentUser.name,
-      })
-    );
+    peerMeshRef.current?.sendTyping(targetId, isGroup, isTyping);
   };
 
   // Send in-call chat message
   const handleSendInCallMessage = (text: string) => {
     if (!currentCall) return;
-    wsRef.current?.send(
-      JSON.stringify({
-        type: 'chat:send',
-        targetId: currentCall.targetId,
-        isGroup: currentCall.isGroup,
-        senderId: currentUser.id,
-        senderName: currentUser.name,
-        senderAvatar: currentUser.avatar,
-        text,
-      })
-    );
+    const isGroup = currentCall.isGroup;
+    const targetId = currentCall.targetId;
+
+    const newMsg: Message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      targetId,
+      isGroup,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderAvatar: currentUser.avatar,
+      text,
+      reactions: {},
+      timestamp: Date.now(),
+    };
+
+    setMessages((prev) => [...prev, newMsg]);
+    peerMeshRef.current?.sendMessage(newMsg);
   };
 
   // Filter messages for active view
@@ -732,14 +858,12 @@ export default function App() {
 
   const filteredMessages = messages.filter((m) => {
     if (activeDirectUserId) {
-      // 1-on-1 DM: either sender is me & target is peer, or sender is peer & target is me
       return (
         !m.isGroup &&
         ((m.senderId === currentUser.id && m.targetId === activeDirectUserId) ||
           (m.senderId === activeDirectUserId && m.targetId === currentUser.id))
       );
     } else {
-      // Group Room
       return m.isGroup && m.targetId === activeRoomId;
     }
   });
@@ -785,6 +909,7 @@ export default function App() {
           }}
           onJoinRoomCall={handleJoinRoomCall}
           onCreateChannelClick={() => setIsCreateChannelOpen(true)}
+          onDeleteRoom={handleDeleteRoom}
         />
 
         {/* Main Workspace: World Map or Live Conversation */}
@@ -823,6 +948,7 @@ export default function App() {
             onJoinRoomCall={() => {
               if (currentRoom) handleJoinRoomCall(currentRoom);
             }}
+            onDeleteRoom={handleDeleteRoom}
           />
         )}
       </div>
@@ -832,7 +958,7 @@ export default function App() {
         <ActiveCallModal
           call={currentCall}
           currentUser={currentUser}
-          webrtcManager={webrtcManagerRef.current}
+          webrtcManager={peerMeshRef.current}
           remoteStreams={remoteStreams}
           speakingPeers={speakingPeers}
           onEndCall={handleEndCall}
@@ -863,16 +989,13 @@ export default function App() {
           currentUser={currentUser}
           onClose={() => setIsProfileModalOpen(false)}
           onSave={(updates) => {
-            setCurrentUser((prev) => ({
-              ...prev,
+            const updated = {
+              ...currentUser,
               ...updates,
-            }));
-            wsRef.current?.send(
-              JSON.stringify({
-                type: 'user:update_profile',
-                ...updates,
-              })
-            );
+            };
+            setCurrentUser(updated);
+            peerMeshRef.current?.updateCurrentUser(updated);
+            saveUserRealtime(updated, selfPeerId).catch(console.error);
           }}
         />
       )}
@@ -881,23 +1004,23 @@ export default function App() {
       {isCreateChannelOpen && (
         <CreateChannelModal
           onClose={() => setIsCreateChannelOpen(false)}
-          onCreate={(name, description, isVoiceVideo) => {
-            wsRef.current?.send(
-              JSON.stringify({
-                type: 'room:create',
-                name,
-                description,
-                isVoiceVideo,
-                userId: currentUser.id,
-              })
-            );
-          }}
+          onCreate={handleCreateRoom}
+          availableUsers={users}
+          currentUserId={currentUser.id}
         />
       )}
 
       {/* Multi-Tab Testing Helper Modal */}
       {isMultiTabOpen && (
-        <MultiTabHelperModal onClose={() => setIsMultiTabOpen(false)} />
+        <MultiTabHelperModal
+          onClose={() => setIsMultiTabOpen(false)}
+          selfPeerId={selfPeerId}
+          onSwitchPersona={(personaKey) => {
+            const url = new URL(window.location.href);
+            url.searchParams.set('persona', personaKey);
+            window.location.href = url.toString();
+          }}
+        />
       )}
     </div>
   );

@@ -2,7 +2,7 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "Information and real-time presence of Elie Chat users around the world.",
+      "description": "User profile, presence and location information for Elie Chat users.",
       "type": "object",
       "properties": {
         "id": {
@@ -19,26 +19,35 @@
         "avatar": {
           "type": "string",
           "description": "Avatar image URL or path",
-          "maxLength": 500
+          "maxLength": 1000
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address if authenticated via Firebase Auth",
+          "maxLength": 150
         },
         "status": {
           "type": "string",
           "description": "Real-time presence status",
-          "enum": ["online", "away", "busy", "in-call"]
+          "enum": ["online", "away", "busy", "in-call", "offline"]
         },
         "customStatus": {
           "type": "string",
-          "description": "Custom status tagline (e.g. role and location)",
+          "description": "Custom status tagline",
           "maxLength": 150
         },
         "peerId": {
           "type": "string",
-          "description": "Dynamic registered PeerJS ID for direct WebRTC signaling",
+          "description": "Optional registered WebRTC peer ID",
           "maxLength": 150
         },
         "lastActive": {
           "type": "number",
-          "description": "Timestamp in milliseconds of last heartbeat"
+          "description": "Timestamp in milliseconds of last active heartbeat"
+        },
+        "lastSeen": {
+          "type": "number",
+          "description": "Timestamp in milliseconds of last seen offline"
         },
         "location": {
           "type": "object",
@@ -57,7 +66,7 @@
     },
     "Room": {
       "title": "Room",
-      "description": "User-created group and channel rooms for text chat or live voice/video stages.",
+      "description": "Public and user-created channels and group rooms for global chat and calling.",
       "type": "object",
       "properties": {
         "id": {
@@ -105,6 +114,10 @@
           "type": "boolean",
           "description": "Whether this is a user-created custom group"
         },
+        "isPrivate": {
+          "type": "boolean",
+          "description": "Whether this group is private to invited members"
+        },
         "memberIds": {
           "type": "array",
           "description": "List of user IDs who are members of this group"
@@ -112,19 +125,222 @@
         "createdAt": {
           "type": "number",
           "description": "Creation timestamp in milliseconds"
+        },
+        "activeCall": {
+          "type": "object",
+          "description": "Current ongoing room call state"
         }
       },
       "required": ["id", "name", "type", "createdById", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Permanent 1-on-1 and group chat messages with media, emojis, and voice audio.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique message ID",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "conversationId": {
+          "type": "string",
+          "description": "Conversation grouping key (for 1-on-1: userA_userB, for rooms: room_roomId)",
+          "maxLength": 150
+        },
+        "targetId": {
+          "type": "string",
+          "description": "Target roomId or recipient userId",
+          "maxLength": 128
+        },
+        "isGroup": {
+          "type": "boolean",
+          "description": "Whether this message belongs to a group channel"
+        },
+        "senderId": {
+          "type": "string",
+          "description": "User ID of the sender",
+          "maxLength": 128
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Display name of the sender",
+          "maxLength": 100
+        },
+        "senderAvatar": {
+          "type": "string",
+          "description": "Avatar of the sender",
+          "maxLength": 1000
+        },
+        "text": {
+          "type": "string",
+          "description": "Text content of the message",
+          "maxLength": 5000
+        },
+        "mediaUrl": {
+          "type": "string",
+          "description": "URL of attached image or file",
+          "maxLength": 2000
+        },
+        "mediaType": {
+          "type": "string",
+          "description": "Type of attached media",
+          "enum": ["image", "file"]
+        },
+        "voiceAudio": {
+          "type": "string",
+          "description": "Audio data URL or storage URL of voice note",
+          "maxLength": 500000
+        },
+        "voiceDuration": {
+          "type": "number",
+          "description": "Duration of voice message in seconds"
+        },
+        "replyTo": {
+          "type": "object",
+          "description": "Quoted message reference for reply"
+        },
+        "reactions": {
+          "type": "object",
+          "description": "Emoji reactions mapped to arrays of user IDs"
+        },
+        "status": {
+          "type": "string",
+          "description": "Delivery status of the message",
+          "enum": ["sent", "delivered", "read"]
+        },
+        "readBy": {
+          "type": "array",
+          "description": "List of user IDs who have read this message"
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Message creation timestamp in milliseconds"
+        }
+      },
+      "required": ["id", "conversationId", "targetId", "senderId", "senderName", "timestamp"]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "Real-time WebRTC audio/video call signaling session in Firebase.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique call session ID",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "callerId": {
+          "type": "string",
+          "description": "User ID of call initiator",
+          "maxLength": 128
+        },
+        "callerName": {
+          "type": "string",
+          "description": "Display name of call initiator",
+          "maxLength": 100
+        },
+        "callerAvatar": {
+          "type": "string",
+          "description": "Avatar of call initiator",
+          "maxLength": 1000
+        },
+        "receiverId": {
+          "type": "string",
+          "description": "User ID of call receiver or roomId",
+          "maxLength": 128
+        },
+        "isGroup": {
+          "type": "boolean",
+          "description": "Whether call is a group room call"
+        },
+        "type": {
+          "type": "string",
+          "description": "Media type of call",
+          "enum": ["audio", "video"]
+        },
+        "status": {
+          "type": "string",
+          "description": "Current lifecycle status of the call",
+          "enum": ["calling", "ringing", "accepted", "rejected", "busy", "ended"]
+        },
+        "offer": {
+          "type": "object",
+          "description": "SDP offer payload"
+        },
+        "answer": {
+          "type": "object",
+          "description": "SDP answer payload"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Call initiation timestamp"
+        },
+        "endedAt": {
+          "type": "number",
+          "description": "Call completion timestamp"
+        }
+      },
+      "required": ["id", "callerId", "callerName", "receiverId", "type", "status", "createdAt"]
+    },
+    "CallCandidate": {
+      "title": "CallCandidate",
+      "description": "WebRTC ICE candidate payload for signaling exchange.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Candidate ID",
+          "maxLength": 128
+        },
+        "candidate": {
+          "type": "string",
+          "description": "ICE candidate string",
+          "maxLength": 5000
+        },
+        "sdpMid": {
+          "type": "string",
+          "description": "SDP media ID",
+          "maxLength": 100
+        },
+        "sdpMLineIndex": {
+          "type": "number",
+          "description": "SDP media line index"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Candidate creation timestamp"
+        }
+      },
+      "required": ["candidate", "createdAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
-      "description": "Public directory of Elie Chat users, real-time presence and locations across the globe"
+      "description": "Directory of Elie Chat users, real-time presence, and global locations"
     },
     "/rooms/{roomId}": {
       "schema": "Room",
-      "description": "Public and user-created channels and group rooms for global chat and calling"
+      "description": "Channels and group rooms for global chat and calling"
+    },
+    "/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Permanent 1-on-1 and group chat messages"
+    },
+    "/calls/{callId}": {
+      "schema": "Call",
+      "description": "WebRTC audio/video call signaling sessions"
+    },
+    "/calls/{callId}/callerCandidates/{candId}": {
+      "schema": "CallCandidate",
+      "description": "ICE candidates generated by caller"
+    },
+    "/calls/{callId}/receiverCandidates/{candId}": {
+      "schema": "CallCandidate",
+      "description": "ICE candidates generated by receiver"
     }
   }
 }

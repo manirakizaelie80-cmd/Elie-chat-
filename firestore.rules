@@ -7,18 +7,20 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function isValidUser(data) {
       return data.keys().hasAll(['id', 'name', 'status'])
         && data.id is string && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
-        && data.status in ['online', 'away', 'busy', 'in-call']
+        && data.status in ['online', 'away', 'busy', 'in-call', 'offline']
+        && (!('email' in data) || (data.email is string && data.email.size() <= 150))
         && (!('customStatus' in data) || (data.customStatus is string && data.customStatus.size() <= 150))
-        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 500))
+        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1000))
         && (!('peerId' in data) || (data.peerId is string && data.peerId.size() <= 150))
-        && (!('lastActive' in data) || data.lastActive is number);
+        && (!('lastActive' in data) || data.lastActive is number)
+        && (!('lastSeen' in data) || data.lastSeen is number);
     }
 
     function isValidRoom(data) {
@@ -32,7 +34,42 @@ service cloud.firestore {
         && (!('createdByName' in data) || (data.createdByName is string && data.createdByName.size() <= 100))
         && (!('category' in data) || (data.category is string && data.category.size() <= 50))
         && (!('icon' in data) || (data.icon is string && data.icon.size() <= 10))
-        && (!('isCustomGroup' in data) || data.isCustomGroup is bool);
+        && (!('isCustomGroup' in data) || data.isCustomGroup is bool)
+        && (!('isPrivate' in data) || data.isPrivate is bool)
+        && (!('memberIds' in data) || data.memberIds is list);
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['id', 'conversationId', 'targetId', 'senderId', 'senderName', 'timestamp'])
+        && data.id is string && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.conversationId is string && data.conversationId.size() <= 150
+        && data.targetId is string && data.targetId.size() <= 128
+        && data.senderId is string && data.senderId.size() <= 128
+        && data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 100
+        && data.timestamp is number
+        && (!('isGroup' in data) || data.isGroup is bool)
+        && (!('senderAvatar' in data) || (data.senderAvatar is string && data.senderAvatar.size() <= 1000))
+        && (!('text' in data) || (data.text is string && data.text.size() <= 5000))
+        && (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
+        && (!('mediaType' in data) || data.mediaType in ['image', 'file'])
+        && (!('voiceAudio' in data) || (data.voiceAudio is string && data.voiceAudio.size() <= 500000))
+        && (!('voiceDuration' in data) || data.voiceDuration is number)
+        && (!('status' in data) || data.status in ['sent', 'delivered', 'read'])
+        && (!('readBy' in data) || data.readBy is list);
+    }
+
+    function isValidCall(data) {
+      return data.keys().hasAll(['id', 'callerId', 'callerName', 'receiverId', 'type', 'status', 'createdAt'])
+        && data.id is string && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.callerId is string && data.callerId.size() <= 128
+        && data.callerName is string && data.callerName.size() <= 100
+        && data.receiverId is string && data.receiverId.size() <= 128
+        && data.type in ['audio', 'video']
+        && data.status in ['calling', 'ringing', 'accepted', 'rejected', 'busy', 'ended']
+        && data.createdAt is number
+        && (!('callerAvatar' in data) || (data.callerAvatar is string && data.callerAvatar.size() <= 1000))
+        && (!('isGroup' in data) || data.isGroup is bool)
+        && (!('endedAt' in data) || data.endedAt is number);
     }
 
     // Public user directory for Elie Chat global presence & location discovery
@@ -45,9 +82,31 @@ service cloud.firestore {
     // Public & user-created channels and groups
     match /rooms/{roomId} {
       allow read: if true;
-      allow create: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId;
-      allow update: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId;
+      allow create, update: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId;
       allow delete: if isValidId(roomId);
+    }
+
+    // Real-time persistent messages for 1-on-1 and group chats
+    match /messages/{messageId} {
+      allow read: if true;
+      allow create: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
+      allow update: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
+      allow delete: if isValidId(messageId);
+    }
+
+    // WebRTC Real-Time Call Signaling
+    match /calls/{callId} {
+      allow read: if true;
+      allow create, update: if isValidId(callId) && isValidCall(request.resource.data) && request.resource.data.id == callId;
+      allow delete: if isValidId(callId);
+
+      match /callerCandidates/{candId} {
+        allow read, write: if isValidId(callId) && isValidId(candId);
+      }
+
+      match /receiverCandidates/{candId} {
+        allow read, write: if isValidId(callId) && isValidId(candId);
+      }
     }
   }
 }

@@ -16,7 +16,8 @@ import {
   VolumeX,
   Sparkles,
   Send,
-  X
+  X,
+  SwitchCamera
 } from 'lucide-react';
 import { ActiveCall, CallParticipant, User, Message } from '../types';
 import { WebRTCManager } from '../utils/webrtcManager';
@@ -35,6 +36,8 @@ interface ActiveCallModalProps {
   isScreenSharing: boolean;
   isMuted: boolean;
   isCameraOff: boolean;
+  localStream?: MediaStream | null;
+  onSwitchCamera?: () => void;
   // in-call chat
   inCallMessages: Message[];
   onSendInCallMessage: (text: string) => void;
@@ -53,6 +56,8 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
   isScreenSharing,
   isMuted,
   isCameraOff,
+  localStream,
+  onSwitchCamera,
   inCallMessages,
   onSendInCallMessage,
 }) => {
@@ -85,13 +90,13 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
 
   // Attach local stream
   useEffect(() => {
-    if (localVideoRef.current && webrtcManager) {
-      const localStream = webrtcManager.getLocalStream();
-      if (localStream) {
-        localVideoRef.current.srcObject = localStream;
+    if (localVideoRef.current) {
+      const activeStream = localStream || (webrtcManager ? webrtcManager.getLocalStream() : null);
+      if (activeStream) {
+        localVideoRef.current.srcObject = activeStream;
       }
     }
-  }, [webrtcManager, isCameraOff, isScreenSharing]);
+  }, [localStream, webrtcManager, isCameraOff, isScreenSharing]);
 
   // Attach remote streams whenever remoteStreams map updates
   useEffect(() => {
@@ -537,6 +542,17 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
           >
             {isCameraOff ? <VideoOff className="w-5 h-5" /> : <Video className="w-5 h-5" />}
           </button>
+
+          {/* Switch Camera for Mobile */}
+          {onSwitchCamera && !isCameraOff && (
+            <button
+              onClick={onSwitchCamera}
+              className="p-3.5 rounded-full bg-slate-800 text-slate-200 hover:bg-slate-700 transition-all duration-150"
+              title="Flip camera (front / back)"
+            >
+              <SwitchCamera className="w-5 h-5" />
+            </button>
+          )}
 
           {/* Screen Share */}
           <button

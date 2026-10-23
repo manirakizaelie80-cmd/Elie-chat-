@@ -28,13 +28,6 @@ export interface PeerMeshCallbacks {
   onRoomCreated: (room: Room) => void;
 }
 
-const KNOWN_PERSONA_IDS = [
-  'syncwave-user-elie',
-  'syncwave-user-marcus',
-  'syncwave-user-elena',
-  'syncwave-user-kenji',
-];
-
 const DISCOVERY_TOPIC = 'syncwave-elie-chat-global-discovery-v2';
 
 export class PeerMeshManager {
@@ -48,6 +41,9 @@ export class PeerMeshManager {
   
   // Active MediaConnections: map peerId -> MediaConnection
   private mediaConnections: Map<string, MediaConnection> = new Map();
+
+  // Pending connection attempts to prevent duplicates
+  private pendingConnections: Set<string> = new Set();
 
   // Known online peers: map userId -> { user: User, peerId: string, lastSeen: number }
   private connectedPeers: Map<string, { user: User; peerId: string; lastSeen: number }> = new Map();
@@ -97,7 +93,20 @@ export class PeerMeshManager {
     const createPeerInstance = (idToUse?: string) => {
       // By default new Peer() connects to the free public PeerJS Cloud Server (0.peerjs.com)
       const options: any = {
-        debug: 1,
+        debug: 0,
+        logFunction: (_logLevel: number, ...rest: any[]) => {
+          const str = rest
+            .map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item)))
+            .join(' ');
+          // Suppress benign peer-unavailable connection errors when a peer is offline
+          if (
+            str.includes('Could not connect to peer') ||
+            str.includes('peer-unavailable') ||
+            str.includes('PeerUnavailable')
+          ) {
+            return;
+          }
+        },
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -110,34 +119,38 @@ export class PeerMeshManager {
       const peerInstance = idToUse ? new Peer(idToUse, options) : new Peer(options);
 
       peerInstance.on('open', (id) => {
-        console.log(`[PeerJS Cloud] Peer registered dynamically with ID: ${id}`);
         this.selfPeerId = id;
         this.callbacks.onSelfPeerId(id);
 
-        // Save self and probe other peers
+        // Announce presence across discovery channels
         this.publishDiscoveryAnnounce();
-        this.probeKnownPeers();
       });
 
       peerInstance.on('connection', (conn) => {
-        console.log(`[PeerJS] Incoming DataConnection from ${conn.peer}`);
         this.setupDataConnection(conn);
       });
 
       peerInstance.on('call', (mediaConn) => {
-        console.log(`[PeerJS] Incoming MediaConnection (Call) from ${mediaConn.peer}`);
         this.setupIncomingMediaConnection(mediaConn);
       });
 
       peerInstance.on('error', (err: any) => {
-        console.warn('[PeerJS] Error event:', err.type, err.message);
+        // Silently handle peer-unavailable as it happens normally when peers are offline
+        if (err.type === 'peer-unavailable' || err.message?.includes('Could not connect to peer')) {
+          const msg = err.message || '';
+          const match = msg.match(/Could not connect to peer ([\w-]+)/);
+          if (match && match[1]) {
+            this.pendingConnections.delete(match[1]);
+          }
+          return;
+        }
 
         // If preferred ID is taken (e.g. same user in another tab), fall back to unique ID
         if (err.type === 'unavailable-id' && idToUse) {
-          console.log('[PeerJS] Preferred ID unavailable. Re-registering with unique dynamic ID...');
           peerInstance.destroy();
           const fallbackId = `${idToUse}-${Math.floor(1000 + Math.random() * 9000)}`;
           createPeerInstance(fallbackId);
+          return;
         }
       });
 
@@ -198,6 +211,7 @@ export class PeerMeshManager {
         const wsUrl = `wss://ntfy.sh/${DISCOVERY_TOPIC}/ws`;
         const ws = new WebSocket(wsUrl);
         this.discoveryWs = ws;
+        const connectionStartTime = Date.now();
 
         ws.onopen = () => {
           // Announce presence once open
@@ -208,7 +222,18 @@ export class PeerMeshManager {
           try {
             const raw = JSON.parse(event.data);
             if (raw.event === 'message' && raw.message) {
+              const msgTime = raw.time ? raw.time * 1000 : 0;
+              // Ignore old cached backlog messages from before this connection opened
+              if (msgTime && msgTime < connectionStartTime - 3000) {
+                return;
+              }
+
               const payload = JSON.parse(raw.message);
+              // Ignore stale announcements older than 15 seconds
+              if (payload.timestamp && Date.now() - payload.timestamp > 15000) {
+                return;
+              }
+
               if (payload.peerId && payload.peerId !== this.selfPeerId) {
                 if (payload.type === 'ANNOUNCE' && payload.user) {
                   this.connectToPeer(payload.peerId, payload.user);
@@ -271,40 +296,14 @@ export class PeerMeshManager {
     }
   }
 
-  // 4. Proactive Probing of Known Personas and Cached Peers
-  private probeKnownPeers() {
-    // Probe standard personas (except ourselves)
-    for (const personaId of KNOWN_PERSONA_IDS) {
-      if (personaId !== this.selfPeerId && !this.dataConnections.has(personaId)) {
-        this.connectToPeer(personaId);
-      }
-    }
-
-    // Probe any cached peers from previous sessions
-    try {
-      const cached = localStorage.getItem('syncwave_cached_peers');
-      if (cached) {
-        const peers = JSON.parse(cached);
-        if (Array.isArray(peers)) {
-          for (const p of peers) {
-            if (p.peerId && p.peerId !== this.selfPeerId && !this.dataConnections.has(p.peerId)) {
-              this.connectToPeer(p.peerId, p.user);
-            }
-          }
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
-  }
-
   // Connect to a peer via PeerJS DataConnection
   public connectToPeer(targetPeerId: string, knownUser?: User) {
     if (!this.peer || !this.selfPeerId || targetPeerId === this.selfPeerId) return;
-    if (this.dataConnections.has(targetPeerId)) return;
+    if (this.dataConnections.has(targetPeerId) || this.pendingConnections.has(targetPeerId)) return;
+
+    this.pendingConnections.add(targetPeerId);
 
     try {
-      console.log(`[PeerJS] Initiating DataConnection to ${targetPeerId}`);
       const conn = this.peer.connect(targetPeerId, {
         reliable: true,
         metadata: {
@@ -313,9 +312,22 @@ export class PeerMeshManager {
         },
       });
 
+      if (!conn) {
+        this.pendingConnections.delete(targetPeerId);
+        return;
+      }
+
+      conn.on('error', () => {
+        this.pendingConnections.delete(targetPeerId);
+      });
+
+      conn.on('close', () => {
+        this.pendingConnections.delete(targetPeerId);
+      });
+
       this.setupDataConnection(conn, knownUser);
     } catch (err) {
-      console.warn(`Failed to connect to peer ${targetPeerId}:`, err);
+      this.pendingConnections.delete(targetPeerId);
     }
   }
 
@@ -324,7 +336,7 @@ export class PeerMeshManager {
     const peerId = conn.peer;
 
     conn.on('open', () => {
-      console.log(`[PeerJS] DataConnection open with ${peerId}`);
+      this.pendingConnections.delete(peerId);
       this.dataConnections.set(peerId, conn);
 
       // Send greeting with our profile
@@ -345,12 +357,12 @@ export class PeerMeshManager {
     });
 
     conn.on('close', () => {
-      console.log(`[PeerJS] DataConnection closed with ${peerId}`);
+      this.pendingConnections.delete(peerId);
       this.handlePeerDisconnected(peerId);
     });
 
-    conn.on('error', (err) => {
-      console.warn(`[PeerJS] DataConnection error with ${peerId}:`, err);
+    conn.on('error', () => {
+      this.pendingConnections.delete(peerId);
     });
   }
 

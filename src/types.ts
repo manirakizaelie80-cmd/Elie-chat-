@@ -11,14 +11,18 @@ export interface User {
   id: string;
   name: string;
   avatar: string;
-  status: 'online' | 'away' | 'busy' | 'in-call';
+  email?: string;
+  status: 'online' | 'away' | 'busy' | 'in-call' | 'offline';
   customStatus?: string;
   location?: UserLocation;
+  peerId?: string;
   lastActive: number;
+  lastSeen?: number;
 }
 
 export interface Message {
   id: string;
+  conversationId: string; // for 1-on-1: userA__userB (sorted), for rooms: room__roomId
   targetId: string; // roomId or recipient userId
   isGroup: boolean;
   senderId: string;
@@ -35,6 +39,8 @@ export interface Message {
     senderName: string;
     text: string;
   };
+  status?: 'sent' | 'delivered' | 'read';
+  readBy?: string[];
   timestamp: number;
 }
 
@@ -49,6 +55,7 @@ export interface Room {
   category?: string;
   icon?: string;
   isCustomGroup?: boolean;
+  isPrivate?: boolean;
   memberIds?: string[];
   activeCall?: {
     callId: string;
@@ -78,6 +85,21 @@ export interface ActiveCall {
   initiatorAvatar: string;
   startedAt: number;
   participants: CallParticipant[];
+}
+
+export interface CallSession {
+  id: string;
+  callerId: string;
+  callerName: string;
+  callerAvatar?: string;
+  receiverId: string;
+  isGroup: boolean;
+  type: 'audio' | 'video';
+  status: 'calling' | 'ringing' | 'accepted' | 'rejected' | 'busy' | 'ended';
+  offer?: any;
+  answer?: any;
+  createdAt: number;
+  endedAt?: number;
 }
 
 export type ViewTab = 'chats' | 'rooms' | 'direct' | 'world-map' | 'active-calls';

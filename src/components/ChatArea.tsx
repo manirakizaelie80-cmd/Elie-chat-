@@ -16,9 +16,13 @@ import {
   Users,
   Radio,
   Sparkles,
-  Trash2
+  Trash2,
+  ArrowLeft,
+  Check,
+  CheckCheck
 } from 'lucide-react';
 import { Message, User, Room } from '../types';
+import { formatLastSeen } from '../utils/userSync';
 
 interface ChatAreaProps {
   currentUser: User;
@@ -39,6 +43,8 @@ interface ChatAreaProps {
   onStartCall: (type: 'audio' | 'video') => void;
   onJoinRoomCall?: () => void;
   onDeleteRoom?: (roomId: string) => void;
+  onDeleteMessage?: (messageId: string) => void;
+  onBackToSidebar?: () => void;
 }
 
 const COMMON_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🚀', '👀'];
@@ -55,11 +61,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onStartCall,
   onJoinRoomCall,
   onDeleteRoom,
+  onDeleteMessage,
+  onBackToSidebar,
 }) => {
   const [inputText, setInputText] = useState('');
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
-  const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null); // messageId or 'input'
+  const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   
   // Voice Recording state
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -134,7 +143,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       };
       reader.readAsDataURL(file);
     }
-    // reset input
     e.target.value = '';
   };
 
@@ -169,7 +177,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         };
         reader.readAsDataURL(audioBlob);
 
-        // stop all audio tracks
         stream.getTracks().forEach((track) => track.stop());
       };
 
@@ -182,7 +189,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }, 1000);
     } catch (err) {
       console.warn('Microphone access denied for voice note', err);
-      alert('Could not access microphone for voice message.');
+      alert('Could not access microphone for voice message. Please enable microphone permissions.');
     }
   };
 
@@ -195,7 +202,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       if (send) {
         mediaRecorderRef.current.stop();
       } else {
-        // Cancel without sending
         mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
       }
     }
@@ -221,13 +227,43 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const isRoom = Boolean(currentRoom);
   const targetTitle = isRoom ? currentRoom?.name : directUser?.name;
-  const targetDesc = isRoom ? currentRoom?.description : (directUser?.customStatus || directUser?.status);
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-950 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-slate-950 overflow-hidden relative">
+      {/* Image Preview Lightbox */}
+      {previewImageUrl && (
+        <div 
+          onClick={() => setPreviewImageUrl(null)}
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 cursor-pointer animate-in fade-in"
+        >
+          <button 
+            onClick={() => setPreviewImageUrl(null)}
+            className="absolute top-4 right-4 p-2 text-white bg-slate-800/80 rounded-full hover:bg-slate-700"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <img 
+            src={previewImageUrl} 
+            alt="Enlarged preview" 
+            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg"
+          />
+        </div>
+      )}
+
       {/* Chat Header */}
-      <div className="h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900/60 shrink-0">
-        <div className="flex items-center gap-3 truncate">
+      <div className="h-14 border-b border-slate-800 px-3 md:px-4 flex items-center justify-between bg-slate-900/60 shrink-0 z-10">
+        <div className="flex items-center gap-2 md:gap-3 truncate flex-1 min-w-0 mr-2">
+          {/* Mobile Back Button to return to sidebar */}
+          {onBackToSidebar && (
+            <button
+              onClick={onBackToSidebar}
+              className="md:hidden p-1.5 -ml-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+              title="Back to conversations"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+
           {isRoom ? (
             <div className="w-8 h-8 rounded-lg bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold text-sm shrink-0 border border-blue-500/30">
               {currentRoom?.icon ? (
@@ -240,32 +276,44 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 '#'
               )}
             </div>
-          ) : directUser?.avatar ? (
-            <img
-              src={directUser.avatar}
-              alt={directUser.name}
-              referrerPolicy="no-referrer"
-              className="w-8 h-8 rounded-full object-cover shrink-0"
-            />
           ) : (
-            <div className="w-8 h-8 rounded-full bg-slate-700 text-slate-200 flex items-center justify-center font-bold text-xs shrink-0">
-              {directUser?.name[0] || 'U'}
+            <div className="relative shrink-0">
+              {directUser?.avatar ? (
+                <img
+                  src={directUser.avatar}
+                  alt={directUser.name}
+                  referrerPolicy="no-referrer"
+                  className="w-8 h-8 rounded-full object-cover"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-slate-700 text-slate-200 flex items-center justify-center font-bold text-xs">
+                  {directUser?.name[0] || 'U'}
+                </div>
+              )}
+              {directUser && (
+                <span
+                  className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-slate-900 ${
+                    directUser.status === 'online'
+                      ? 'bg-emerald-500'
+                      : directUser.status === 'in-call'
+                      ? 'bg-purple-500'
+                      : directUser.status === 'away'
+                      ? 'bg-amber-500'
+                      : 'bg-slate-600'
+                  }`}
+                />
+              )}
             </div>
           )}
 
-          <div className="truncate">
+          <div className="truncate flex-1 min-w-0 text-left">
             <div className="flex items-center gap-1.5 truncate">
               <h2 className="text-sm font-semibold text-white tracking-tight truncate">
-                {targetTitle}
+                {targetTitle || 'Elie Chat'}
               </h2>
               {isRoom && currentRoom?.isCustomGroup && (
                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-semibold border border-purple-500/30 shrink-0">
-                  Custom Group
-                </span>
-              )}
-              {isRoom && currentRoom?.category && (
-                <span className="text-[10px] text-slate-400 hidden sm:inline shrink-0">
-                  • {currentRoom.category}
+                  Group
                 </span>
               )}
               {!isRoom && directUser?.location && (
@@ -274,40 +322,49 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </span>
               )}
             </div>
+
+            {/* Subtitle presence & description */}
             <div className="text-[11px] text-slate-400 truncate flex items-center gap-1.5">
-              <span className="truncate">{targetDesc}</span>
-              {isRoom && currentRoom?.memberIds && currentRoom.memberIds.length > 0 && (
+              {isRoom ? (
                 <>
-                  <span aria-hidden="true">·</span>
-                  <span className="text-purple-400 shrink-0">{currentRoom.memberIds.length} members</span>
+                  <span className="truncate">{currentRoom?.description || 'Active Channel'}</span>
+                  {currentRoom?.type === 'voice-video' && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="text-emerald-400 font-medium">Live Stage</span>
+                    </>
+                  )}
                 </>
-              )}
-              {!isRoom && directUser?.location && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="text-slate-400">
-                    {new Date().toLocaleTimeString('en-US', {
-                      timeZone: directUser.location.timezone,
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: true,
-                    })}{' '}
-                    local
-                  </span>
-                </>
-              )}
-              {isRoom && currentRoom?.type === 'voice-video' && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="text-blue-400 font-medium">Global Video/Voice Stage</span>
-                </>
-              )}
+              ) : directUser ? (
+                <div className="flex items-center gap-1 truncate">
+                  {directUser.status === 'online' ? (
+                    <span className="text-emerald-400 font-medium flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      Online
+                    </span>
+                  ) : directUser.status === 'in-call' ? (
+                    <span className="text-purple-400 font-medium">In Call</span>
+                  ) : directUser.status === 'away' ? (
+                    <span className="text-amber-400">Away</span>
+                  ) : (
+                    <span className="text-slate-500">
+                      {formatLastSeen(directUser.lastSeen)}
+                    </span>
+                  )}
+                  {directUser.customStatus && (
+                    <>
+                      <span className="text-slate-600">·</span>
+                      <span className="truncate text-slate-400">{directUser.customStatus}</span>
+                    </>
+                  )}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
 
-        {/* Action Buttons: Voice / Video Call & Delete if Creator */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Action Buttons: Voice / Video Call & Delete Room */}
+        <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
           {isRoom && currentRoom && currentRoom.createdById === currentUser.id && onDeleteRoom && (
             <button
               onClick={() => {
@@ -355,14 +412,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </div>
 
       {/* Message Feed */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3.5">
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 text-xs py-10 space-y-2">
             <div className="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 mb-2">
               <Users className="w-6 h-6" />
             </div>
             <p className="font-semibold text-slate-300 text-sm">No messages yet</p>
-            <p className="max-w-xs">Send a text, record a voice note, or start a live voice/video call with the buttons above!</p>
+            <p className="max-w-xs text-slate-400">
+              Send a real-time message, attach an image, record a voice note, or start a voice/video call!
+            </p>
           </div>
         ) : (
           messages.map((msg) => {
@@ -375,28 +434,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             return (
               <div
                 key={msg.id}
-                className={`flex gap-3 group ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
+                className={`flex gap-2.5 group ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
               >
                 {/* Avatar */}
-                <div className="shrink-0">
+                <div className="shrink-0 self-end">
                   {msg.senderAvatar ? (
                     <img
                       src={msg.senderAvatar}
                       alt={msg.senderName}
                       referrerPolicy="no-referrer"
-                      className="w-8 h-8 rounded-full object-cover"
+                      className="w-7 h-7 rounded-full object-cover"
                     />
                   ) : (
-                    <div className="w-8 h-8 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center text-xs font-bold border border-slate-700">
+                    <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center text-xs font-bold border border-slate-700">
                       {msg.senderName[0] || 'U'}
                     </div>
                   )}
                 </div>
 
                 {/* Content Bubble */}
-                <div className={`max-w-[75%] space-y-1 ${isMe ? 'items-end' : 'items-start'}`}>
-                  {/* Sender Metadata (No pills, clean unboxed typography) */}
-                  <div className={`flex items-center gap-1.5 text-[11px] text-slate-400 ${isMe ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] sm:max-w-[75%] space-y-1 ${isMe ? 'items-end' : 'items-start'}`}>
+                  {/* Sender Metadata */}
+                  <div className={`flex items-center gap-1.5 text-[10px] md:text-[11px] text-slate-400 ${isMe ? 'justify-end' : 'justify-start'}`}>
                     <span className="font-medium text-slate-300">{msg.senderName}</span>
                     <span aria-hidden="true">·</span>
                     <span className="tabular-nums">{timeString}</span>
@@ -412,10 +471,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
                   {/* Message Body */}
                   <div
-                    className={`p-3 rounded-xl text-xs leading-relaxed break-words relative group ${
+                    className={`p-3 rounded-2xl text-xs leading-relaxed break-words relative group ${
                       isMe
-                        ? 'bg-blue-600 text-white rounded-tr-none'
-                        : 'bg-slate-800/90 text-slate-200 rounded-tl-none border border-slate-700/60'
+                        ? 'bg-blue-600 text-white rounded-br-none'
+                        : 'bg-slate-800/95 text-slate-100 rounded-bl-none border border-slate-700/60'
                     }`}
                   >
                     {/* Attached Image */}
@@ -424,8 +483,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         <img
                           src={msg.mediaUrl}
                           alt="Attachment"
-                          className="max-h-64 rounded-lg object-cover w-full hover:scale-105 transition-transform cursor-pointer"
-                          onClick={() => window.open(msg.mediaUrl, '_blank')}
+                          className="max-h-60 rounded-lg object-cover w-full hover:opacity-95 transition-opacity cursor-pointer"
+                          onClick={() => setPreviewImageUrl(msg.mediaUrl!)}
                         />
                       </div>
                     )}
@@ -468,10 +527,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       <p className="whitespace-pre-wrap">{msg.text}</p>
                     )}
 
+                    {/* Delivery & Read Receipts for own messages */}
+                    {isMe && (
+                      <div className="flex items-center justify-end gap-1 mt-1 text-[10px] opacity-80">
+                        {msg.status === 'read' ? (
+                          <span className="flex items-center gap-0.5 text-blue-200" title="Read">
+                            <CheckCheck className="w-3.5 h-3.5" />
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-0.5 text-white/80" title="Delivered">
+                            <Check className="w-3.5 h-3.5" />
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {/* Floating Quick Action Overlay */}
                     <div
-                      className={`absolute top-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-slate-900/90 border border-slate-700 rounded-lg p-1 shadow-md ${
-                        isMe ? '-left-16' : '-right-16'
+                      className={`absolute top-0 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 bg-slate-900/95 border border-slate-700 rounded-lg p-1 shadow-md z-10 ${
+                        isMe ? '-left-18' : '-right-18'
                       }`}
                     >
                       <button
@@ -488,11 +562,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       >
                         <Smile className="w-3 h-3" />
                       </button>
+                      {isMe && onDeleteMessage && (
+                        <button
+                          onClick={() => onDeleteMessage(msg.id)}
+                          title="Delete message"
+                          className="p-1 hover:bg-red-950/60 rounded text-slate-400 hover:text-red-400"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
                     </div>
 
-                    {/* Emoji Reaction Drawer Popover */}
+                    {/* Emoji Reaction Popover */}
                     {showEmojiPicker === msg.id && (
-                      <div className="absolute z-10 bottom-full left-0 mb-1 bg-slate-900 border border-slate-700 rounded-lg p-1.5 shadow-xl flex items-center gap-1.5">
+                      <div className="absolute z-20 bottom-full left-0 mb-1 bg-slate-900 border border-slate-700 rounded-xl p-1.5 shadow-xl flex items-center gap-1">
                         {COMMON_EMOJIS.map((emoji) => (
                           <button
                             key={emoji}
@@ -500,7 +583,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                               onSendReaction(msg.id, emoji);
                               setShowEmojiPicker(null);
                             }}
-                            className="p-1 hover:bg-slate-800 rounded text-base hover:scale-125 transition-transform"
+                            className="p-1.5 hover:bg-slate-800 rounded-lg text-sm hover:scale-125 transition-transform"
                           >
                             {emoji}
                           </button>
@@ -510,7 +593,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   </div>
 
                   {/* Reaction Badges */}
-                  {Object.keys(msg.reactions).length > 0 && (
+                  {msg.reactions && Object.keys(msg.reactions).length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
                       {Object.entries(msg.reactions).map(([emoji, userIds]) => {
                         const hasReacted = userIds.includes(currentUser.id);
@@ -518,7 +601,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           <button
                             key={emoji}
                             onClick={() => onSendReaction(msg.id, emoji)}
-                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium transition-colors ${
+                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
                               hasReacted
                                 ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50'
                                 : 'bg-slate-800/80 text-slate-400 hover:bg-slate-800 border border-slate-700/50'
@@ -541,7 +624,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       {/* Typing Indicator */}
       {typingUsers.length > 0 && (
-        <div className="px-4 py-1 text-xs text-slate-400 flex items-center gap-1.5 italic bg-slate-900/40 border-t border-slate-800/40">
+        <div className="px-4 py-1.5 text-xs text-slate-400 flex items-center gap-1.5 italic bg-slate-900/40 border-t border-slate-800/40">
           <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping" />
           <span>
             {typingUsers.map((u) => u.userName).join(', ')}{' '}
@@ -583,11 +666,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <X className="w-3 h-3" />
             </button>
           </div>
-          <span className="text-xs text-slate-400">Image attached. Press send or Enter.</span>
+          <span className="text-xs text-slate-400">Image attached. Press Send or hit Enter.</span>
         </div>
       )}
 
-      {/* Voice Recording Overlay Bar */}
+      {/* Voice Recording Bar */}
       {isRecordingVoice ? (
         <div className="p-3 bg-red-950/40 border-t border-red-900/50 flex items-center justify-between">
           <div className="flex items-center gap-2 text-red-400 text-xs font-semibold">
@@ -597,13 +680,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={() => stopVoiceRecording(false)}
-              className="px-3 py-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium"
+              className="px-3 py-1 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium"
             >
               Cancel
             </button>
             <button
               onClick={() => stopVoiceRecording(true)}
-              className="px-3 py-1 rounded bg-red-600 text-white hover:bg-red-500 text-xs font-semibold flex items-center gap-1"
+              className="px-3 py-1 rounded-lg bg-red-600 text-white hover:bg-red-500 text-xs font-semibold flex items-center gap-1 shadow-sm"
             >
               <Square className="w-3 h-3 fill-current" />
               <span>Send Voice</span>
@@ -612,8 +695,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       ) : (
         /* Input Composer Bar */
-        <div className="p-3 border-t border-slate-800 bg-slate-900/60">
-          <div className="flex items-end gap-2 bg-slate-950 border border-slate-800 rounded-xl p-2 focus-within:border-blue-500 transition-colors">
+        <div className="p-2.5 md:p-3 border-t border-slate-800 bg-slate-900/80">
+          <div className="flex items-end gap-1.5 md:gap-2 bg-slate-950 border border-slate-800 rounded-xl p-1.5 md:p-2 focus-within:border-blue-500 transition-colors">
             {/* Hidden File Input */}
             <input
               type="file"
@@ -635,7 +718,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             {/* Voice Record Button */}
             <button
               onClick={startVoiceRecording}
-              title="Record voice note"
+              title="Record voice message"
               className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
             >
               <Mic className="w-4 h-4" />
@@ -649,7 +732,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               placeholder={
                 isRoom
                   ? `Message #${currentRoom?.name}...`
-                  : `Message ${directUser?.name}...`
+                  : `Message ${directUser?.name || 'peer'}...`
               }
               rows={1}
               className="flex-1 bg-transparent text-xs text-slate-200 placeholder-slate-500 resize-none focus:outline-none max-h-28 py-1 leading-relaxed"
@@ -666,7 +749,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </button>
 
               {showEmojiPicker === 'input' && (
-                <div className="absolute right-0 bottom-full mb-2 bg-slate-900 border border-slate-700 rounded-lg p-2 shadow-xl flex items-center gap-1 z-20">
+                <div className="absolute right-0 bottom-full mb-2 bg-slate-900 border border-slate-700 rounded-xl p-2 shadow-2xl flex items-center gap-1 z-30">
                   {COMMON_EMOJIS.map((emoji) => (
                     <button
                       key={emoji}
@@ -688,7 +771,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onClick={handleSend}
               disabled={!inputText.trim() && !attachedImage}
               title="Send message (Enter)"
-              className={`p-1.5 rounded-lg transition-colors shrink-0 ${
+              className={`p-1.5 md:p-2 rounded-lg transition-colors shrink-0 ${
                 inputText.trim() || attachedImage
                   ? 'bg-blue-600 text-white hover:bg-blue-500'
                   : 'bg-slate-800 text-slate-600 cursor-not-allowed'

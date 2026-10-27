@@ -8,7 +8,18 @@ import { IncomingCallModal } from './components/IncomingCallModal';
 import { UserProfileModal } from './components/UserProfileModal';
 import { CreateChannelModal } from './components/CreateChannelModal';
 import { MultiTabHelperModal } from './components/MultiTabHelperModal';
-import { User, Room, Message, ActiveCall, ViewTab, CallSession } from './types';
+import { AuthModal } from './components/AuthModal';
+import { GroupManagementModal } from './components/GroupManagementModal';
+import { 
+  User, 
+  Room, 
+  Message, 
+  ActiveCall, 
+  ViewTab, 
+  CallSession, 
+  GroupInvitation, 
+  InAppNotification 
+} from './types';
 import { PeerMeshManager } from './utils/peerMesh';
 import { getUserMediaSafe } from './utils/mediaFallback';
 import { saveUserRealtime, subscribeUsersRealtime, countOnlineUsers } from './utils/userSync';
@@ -17,6 +28,7 @@ import {
   saveMessageRealtime, 
   subscribeConversationMessages, 
   subscribeAllMessagesRealtime, 
+  markMessagesAsDeliveredRealtime,
   markMessagesAsReadRealtime, 
   updateMessageReactionsRealtime, 
   deleteMessageRealtime,
@@ -30,6 +42,12 @@ import {
   subscribeIncomingCalls,
   ActiveWebRTCSession
 } from './utils/firebaseCallSignaling';
+import { 
+  subscribeUserInvitations, 
+  respondToInvitation, 
+  createJoinRequest 
+} from './utils/groupWorkflow';
+import { subscribeUserNotifications } from './utils/notificationSync';
 import { subscribeAuthState } from './utils/auth';
 import { 
   playCallingRing, 
@@ -77,7 +95,7 @@ const DEFAULT_ROOMS: Room[] = [
 const INITIAL_MESSAGES: Message[] = [
   {
     id: 'm-init-1',
-    conversationId: 'room_global-connect',
+    conversationId: 'room__global-connect',
     targetId: 'global-connect',
     isGroup: true,
     senderId: 'user-elie',
@@ -90,7 +108,7 @@ const INITIAL_MESSAGES: Message[] = [
   },
   {
     id: 'm-init-2',
-    conversationId: 'room_global-connect',
+    conversationId: 'room__global-connect',
     targetId: 'global-connect',
     isGroup: true,
     senderId: 'user-elena',
@@ -103,7 +121,7 @@ const INITIAL_MESSAGES: Message[] = [
   },
   {
     id: 'm-init-3',
-    conversationId: 'room_global-connect',
+    conversationId: 'room__global-connect',
     targetId: 'global-connect',
     isGroup: true,
     senderId: 'user-marcus',
@@ -126,9 +144,11 @@ export default function App() {
       return {
         id: 'user-marcus',
         name: 'Marcus Vance',
+        username: 'marcus_design',
         avatar: '/src/assets/images/avatar_designer_1790668663121.jpg',
         status: 'online',
         customStatus: '🎨 Product Designer · New York, USA',
+        readReceiptsEnabled: true,
         location: {
           city: 'New York',
           country: 'United States',
@@ -143,9 +163,11 @@ export default function App() {
       return {
         id: 'user-elena',
         name: 'Elena Rostova',
+        username: 'elena_lead',
         avatar: '/src/assets/images/avatar_tech_lead_1790668646558.jpg',
         status: 'online',
         customStatus: '⚡ Tech Lead · Berlin, Germany',
+        readReceiptsEnabled: true,
         location: {
           city: 'Berlin',
           country: 'Germany',
@@ -160,9 +182,11 @@ export default function App() {
       return {
         id: 'user-kenji',
         name: 'Kenji Sato',
+        username: 'kenji_tokyo',
         avatar: '/src/assets/images/avatar_developer_1790668686679.jpg',
         status: 'online',
         customStatus: '🗼 Software Architect · Tokyo, Japan',
+        readReceiptsEnabled: true,
         location: {
           city: 'Tokyo',
           country: 'Japan',
@@ -179,7 +203,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.location && parsed.id) return parsed;
+        if (parsed.id) return parsed;
       } catch (e) {
         // ignore
       }
@@ -189,9 +213,11 @@ export default function App() {
     return {
       id: 'user-elie',
       name: 'Elie Manirakiza',
+      username: 'elie_founder',
       avatar: '/src/assets/images/avatar_elie_1790670827487.jpg',
       status: 'online',
       customStatus: '🌍 Founder & Host · Kigali, Rwanda',
+      readReceiptsEnabled: true,
       location: {
         city: 'Kigali',
         country: 'Rwanda',
@@ -218,19 +244,25 @@ export default function App() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
 
-  // Navigation State & Mobile Drawer State
+  // Navigation State & Mobile Separate Views State (Requirement 2)
   const [activeTab, setActiveTab] = useState<ViewTab>('chats');
   const [activeRoomId, setActiveRoomId] = useState<string | null>('global-connect');
   const [activeDirectUserId, setActiveDirectUserId] = useState<string | null>(null);
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [mobileScreen, setMobileScreen] = useState<'sidebar' | 'chat'>('sidebar');
 
   // Typing State
   const [typingUsers, setTypingUsers] = useState<{ userId: string; userName: string; targetId: string }[]>([]);
 
-  // Modals
+  // Modals & Popovers
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
   const [isMultiTabOpen, setIsMultiTabOpen] = useState(false);
+  const [managingGroup, setManagingGroup] = useState<Room | null>(null);
+
+  // Group Workflow & Notifications
+  const [pendingInvitations, setPendingInvitations] = useState<GroupInvitation[]>([]);
+  const [notifications, setNotifications] = useState<InAppNotification[]>([]);
 
   // Incoming Call State
   const [incomingCallData, setIncomingCallData] = useState<{
@@ -261,7 +293,6 @@ export default function App() {
     const unsubscribe = subscribeAuthState((fbUser) => {
       if (fbUser) {
         setCurrentUser((prev) => {
-          // If already mapped to same ID, preserve existing custom location
           if (prev.id === fbUser.uid) return prev;
           const updated: User = {
             ...prev,
@@ -329,7 +360,6 @@ export default function App() {
     const unsubscribe = subscribeUsersRealtime((firestoreUsers) => {
       setUsers(() => {
         const map = new Map<string, User>();
-        // Always include currentUser
         map.set(currentUser.id, currentUser);
 
         for (const u of firestoreUsers) {
@@ -369,11 +399,36 @@ export default function App() {
     };
   }, []);
 
-  // Real-Time Firestore Subscription: Load messages for the currently open conversation
+  // Real-Time Firestore Subscriptions: Group Invitations & In-App Notifications
+  useEffect(() => {
+    const unsubInvitations = subscribeUserInvitations(currentUser.id, (invs) => {
+      setPendingInvitations(invs);
+    });
+
+    const unsubNotifs = subscribeUserNotifications(currentUser.id, (notifs) => {
+      setNotifications(notifs);
+    });
+
+    return () => {
+      unsubInvitations();
+      unsubNotifs();
+    };
+  }, [currentUser.id]);
+
+  // Real-Time Firestore Subscription: Messages for currently open conversation
   useEffect(() => {
     const isGroup = activeDirectUserId === null;
     const targetId = isGroup ? activeRoomId : activeDirectUserId;
     if (!targetId) return;
+
+    // Check if group is private and user is unauthorized
+    if (isGroup) {
+      const room = rooms.find((r) => r.id === targetId);
+      if (room?.isPrivate && (!room.memberIds || !room.memberIds.includes(currentUser.id))) {
+        setMessages([]);
+        return;
+      }
+    }
 
     const conversationId = getConversationId(currentUser.id, targetId, isGroup);
 
@@ -382,22 +437,28 @@ export default function App() {
       (cloudMessages: Message[]) => {
         setMessages((prev) => {
           if (cloudMessages.length === 0) {
-            // If empty in Firestore, retain any local initial messages for this room
             const initialForRoom = INITIAL_MESSAGES.filter((m) => m.targetId === targetId);
             return initialForRoom.length > 0 ? initialForRoom : [];
           }
           return cloudMessages;
         });
 
-        // Mark as read in Firestore
-        markMessagesAsReadRealtime(cloudMessages, currentUser.id).catch(console.error);
+        // Mark incoming messages as delivered
+        markMessagesAsDeliveredRealtime(cloudMessages, currentUser.id).catch(console.error);
+
+        // Mark as read when viewer is in chat
+        markMessagesAsReadRealtime(
+          cloudMessages, 
+          currentUser.id, 
+          currentUser.readReceiptsEnabled !== false
+        ).catch(console.error);
       }
     );
 
     return () => {
       unsubscribe();
     };
-  }, [activeRoomId, activeDirectUserId, currentUser.id]);
+  }, [activeRoomId, activeDirectUserId, currentUser.id, currentUser.readReceiptsEnabled, rooms]);
 
   // Real-Time Firestore Subscription: Track unread counts across all conversations
   useEffect(() => {
@@ -405,13 +466,10 @@ export default function App() {
       const counts: Record<string, number> = {};
 
       allMessages.forEach((msg: Message) => {
-        // Skip messages sent by current user
         if (msg.senderId === currentUser.id) return;
-
-        // Check if current user has read it
         const isRead = msg.readBy && msg.readBy.includes(currentUser.id);
         if (!isRead) {
-          const key = msg.isGroup ? msg.targetId : msg.senderId;
+          const key = msg.isGroup ? `room__${msg.targetId}` : [currentUser.id, msg.senderId].sort().join('__');
           counts[key] = (counts[key] || 0) + 1;
         }
       });
@@ -427,7 +485,6 @@ export default function App() {
   // Real-Time Firestore Subscription: Incoming WebRTC Call Signaling
   useEffect(() => {
     const unsubscribe = subscribeIncomingCalls(currentUser.id, (call: CallSession) => {
-      // If already in a call, reject as busy
       if (currentCall) {
         rejectCallSession(call.id).catch(() => {});
         return;
@@ -473,7 +530,6 @@ export default function App() {
       setIsMuted(false);
 
       if (!isGroup && targetUser) {
-        // Direct 1-on-1 WebRTC Call via Firestore Signaling
         playCallingRing();
 
         const session = await startOutgoingCall({
@@ -504,7 +560,6 @@ export default function App() {
 
         activeWebRTCSessionRef.current = session;
       } else if (peerMeshRef.current) {
-        // Group Call Stage
         peerMeshRef.current.startCall(callId, type, targetId, isGroup, stream);
       }
 
@@ -571,7 +626,6 @@ export default function App() {
       setIsMuted(false);
 
       if (!isGroup) {
-        // 1-on-1 WebRTC answer via Firestore Signaling
         const session = await answerIncomingCall({
           callId,
           answeringUser: currentUser,
@@ -737,7 +791,6 @@ export default function App() {
         localStreamRef.current.addTrack(newVideoTrack);
         setLocalStreamState(new MediaStream(localStreamRef.current.getTracks()));
 
-        // Replace track in active RTCPeerConnection if active
         if (activeWebRTCSessionRef.current) {
           const pc = activeWebRTCSessionRef.current.peerConnection;
           const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'video');
@@ -755,7 +808,6 @@ export default function App() {
   const handleToggleScreenShare = async (): Promise<boolean> => {
     if (isScreenSharing) {
       setIsScreenSharing(false);
-      // Revert back to camera if active
       return false;
     } else {
       try {
@@ -798,6 +850,8 @@ export default function App() {
     description: string;
     type: 'text' | 'voice-video';
     isCustomGroup: boolean;
+    isPrivate?: boolean;
+    requiresApproval?: boolean;
     icon?: string;
     category?: string;
     memberIds?: string[];
@@ -808,9 +862,12 @@ export default function App() {
       description: roomData.description,
       type: roomData.type,
       isCustomGroup: roomData.isCustomGroup,
+      isPrivate: roomData.isPrivate,
+      requiresApproval: roomData.requiresApproval,
       icon: roomData.icon,
       category: roomData.category,
       memberIds: roomData.memberIds,
+      adminIds: [currentUser.id],
       createdById: currentUser.id,
       createdByName: currentUser.name,
       createdAt: Date.now(),
@@ -819,7 +876,7 @@ export default function App() {
     setRooms((prev) => [...prev.filter((r) => r.id !== newRoom.id), newRoom]);
     setActiveRoomId(newRoom.id);
     setActiveDirectUserId(null);
-    setIsMobileSidebarOpen(false);
+    setMobileScreen('chat');
 
     await saveRoomRealtime(newRoom).catch(console.error);
   };
@@ -831,6 +888,44 @@ export default function App() {
       setActiveRoomId('global-connect');
     }
     await deleteRoomRealtime(roomId).catch(console.error);
+  };
+
+  // Respond to Group Invitation
+  const handleRespondInvitation = async (invitation: GroupInvitation, accept: boolean) => {
+    try {
+      await respondToInvitation(invitation, currentUser, accept);
+      setPendingInvitations((prev) => prev.filter((i) => i.id !== invitation.id));
+      if (accept) {
+        setActiveRoomId(invitation.groupId);
+        setActiveDirectUserId(null);
+        setMobileScreen('chat');
+      }
+    } catch (err) {
+      console.error('Failed to respond to invitation:', err);
+    }
+  };
+
+  // Request to Join Group
+  const handleRequestJoinGroup = async (group: Room) => {
+    try {
+      await createJoinRequest(group, currentUser);
+      alert(`Join request sent for "${group.name}". A group administrator has been notified.`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to submit join request.');
+    }
+  };
+
+  // Select Notification
+  const handleSelectNotification = (notif: InAppNotification) => {
+    if (notif.isGroup && notif.targetId) {
+      setActiveRoomId(notif.targetId);
+      setActiveDirectUserId(null);
+      setMobileScreen('chat');
+    } else if (notif.targetId) {
+      setActiveDirectUserId(notif.targetId);
+      setActiveRoomId(null);
+      setMobileScreen('chat');
+    }
   };
 
   // Send Message (Real Firestore Cloud Persistence)
@@ -860,20 +955,17 @@ export default function App() {
       voiceAudio: payload.voiceAudio,
       voiceDuration: payload.voiceDuration,
       replyTo: payload.replyTo,
-      status: 'delivered',
+      status: 'sent',
       readBy: [currentUser.id],
       reactions: {},
       timestamp: Date.now(),
     };
 
-    // Optimistically show in UI
     setMessages((prev) => [...prev, newMsg]);
-
-    // Persist permanently in Firestore
     await saveMessageRealtime(newMsg).catch(console.error);
   };
 
-  // Send Reaction (Real Firestore Persistence)
+  // Send Reaction
   const handleSendReaction = (messageId: string, emoji: string) => {
     setMessages((prev) =>
       prev.map((m) => {
@@ -918,7 +1010,7 @@ export default function App() {
       senderName: currentUser.name,
       senderAvatar: currentUser.avatar,
       text,
-      status: 'delivered',
+      status: 'sent',
       readBy: [currentUser.id],
       reactions: {},
       timestamp: Date.now(),
@@ -948,7 +1040,6 @@ export default function App() {
     (t) => t.targetId === (activeDirectUserId || activeRoomId)
   );
 
-  // Calculate real deduplicated online users count
   const realOnlineCount = countOnlineUsers(users);
 
   return (
@@ -957,14 +1048,20 @@ export default function App() {
       <TopNav
         currentUser={currentUser}
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => {
+          setActiveTab(tab);
+          if (tab === 'chats') setMobileScreen('sidebar');
+        }}
         activeCalls={activeCalls}
         onOpenProfile={() => setIsProfileModalOpen(true)}
         onOpenMultiTab={() => setIsMultiTabOpen(true)}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
         isConnected={isConnected}
         onlineCount={realOnlineCount}
-        onToggleMobileSidebar={() => setIsMobileSidebarOpen((prev) => !prev)}
-        isMobileSidebarOpen={isMobileSidebarOpen}
+        onToggleMobileSidebar={() => setMobileScreen((prev) => prev === 'sidebar' ? 'chat' : 'sidebar')}
+        isMobileSidebarOpen={mobileScreen === 'sidebar'}
+        notifications={notifications}
+        onSelectNotification={handleSelectNotification}
       />
 
       {/* Main App Workspace */}
@@ -976,71 +1073,84 @@ export default function App() {
           onSelectRoom={(roomId) => {
             setActiveRoomId(roomId);
             setActiveDirectUserId(null);
-            setIsMobileSidebarOpen(false);
+            setMobileScreen('chat');
           }}
           users={users}
           currentUserId={currentUser.id}
           activeDirectUserId={activeDirectUserId}
           onSelectDirectUser={(userId) => {
             setActiveDirectUserId(userId);
-            setIsMobileSidebarOpen(false);
+            setMobileScreen('chat');
           }}
           activeCalls={activeCalls}
           onStart1on1Call={(targetUser, type) => {
             setActiveDirectUserId(targetUser.id);
+            setMobileScreen('chat');
             handleStartCall(type, targetUser);
           }}
           onJoinRoomCall={handleJoinRoomCall}
           onCreateChannelClick={() => setIsCreateChannelOpen(true)}
           onDeleteRoom={handleDeleteRoom}
           unreadCounts={unreadCounts}
-          isMobileOpen={isMobileSidebarOpen}
-          onCloseMobile={() => setIsMobileSidebarOpen(false)}
+          onlineCount={realOnlineCount}
+          isMobileChatActive={mobileScreen === 'chat'}
+          onCloseMobile={() => setMobileScreen('chat')}
+          pendingInvitations={pendingInvitations}
+          onRespondInvitation={handleRespondInvitation}
+          onOpenGroupManagement={(g) => setManagingGroup(g)}
+          onRequestJoinGroup={handleRequestJoinGroup}
         />
 
         {/* Main Workspace: World Map or Live Conversation */}
         {activeTab === 'world-map' ? (
-          <WorldMapView
-            currentUser={currentUser}
-            users={users}
-            onStartCall={(targetUser, type) => {
-              setActiveDirectUserId(targetUser.id);
-              handleStartCall(type, targetUser);
-            }}
-            onSelectDirectUser={(userId) => {
-              setActiveDirectUserId(userId);
-              setActiveTab('chats');
-            }}
-            onJoinRoomCall={handleJoinRoomCall}
-            worldStageRoom={rooms.find((r) => r.id === 'world-video-stage') || rooms[1]}
-          />
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <WorldMapView
+              currentUser={currentUser}
+              users={users}
+              onStartCall={(targetUser, type) => {
+                setActiveDirectUserId(targetUser.id);
+                setMobileScreen('chat');
+                handleStartCall(type, targetUser);
+              }}
+              onSelectDirectUser={(userId) => {
+                setActiveDirectUserId(userId);
+                setActiveTab('chats');
+                setMobileScreen('chat');
+              }}
+              onJoinRoomCall={handleJoinRoomCall}
+              worldStageRoom={rooms.find((r) => r.id === 'world-video-stage') || rooms[1]}
+            />
+          </div>
         ) : (
-          <ChatArea
-            currentUser={currentUser}
-            currentRoom={activeDirectUserId ? null : currentRoom}
-            directUser={directUser}
-            messages={filteredMessages}
-            typingUsers={activeTyping}
-            onSendMessage={handleSendMessage}
-            onSendReaction={handleSendReaction}
-            onSendTyping={handleSendTyping}
-            onStartCall={(type) => {
-              if (activeDirectUserId && directUser) {
-                handleStartCall(type, directUser);
-              } else if (currentRoom) {
-                handleStartCall(type, undefined, currentRoom);
-              }
-            }}
-            onJoinRoomCall={() => {
-              if (currentRoom) handleJoinRoomCall(currentRoom);
-            }}
-            onDeleteRoom={handleDeleteRoom}
-            onDeleteMessage={(msgId) => {
-              deleteMessageRealtime(msgId).catch(console.error);
-              setMessages((prev) => prev.filter((m) => m.id !== msgId));
-            }}
-            onBackToSidebar={() => setIsMobileSidebarOpen(true)}
-          />
+          <div className={`flex-1 flex flex-col overflow-hidden ${mobileScreen === 'sidebar' ? 'hidden md:flex' : 'flex'}`}>
+            <ChatArea
+              currentUser={currentUser}
+              currentRoom={activeDirectUserId ? null : currentRoom}
+              directUser={directUser}
+              messages={filteredMessages}
+              typingUsers={activeTyping}
+              onSendMessage={handleSendMessage}
+              onSendReaction={handleSendReaction}
+              onSendTyping={handleSendTyping}
+              onStartCall={(type) => {
+                if (activeDirectUserId && directUser) {
+                  handleStartCall(type, directUser);
+                } else if (currentRoom) {
+                  handleStartCall(type, undefined, currentRoom);
+                }
+              }}
+              onJoinRoomCall={() => {
+                if (currentRoom) handleJoinRoomCall(currentRoom);
+              }}
+              onDeleteRoom={handleDeleteRoom}
+              onDeleteMessage={(msgId) => {
+                deleteMessageRealtime(msgId).catch(console.error);
+                setMessages((prev) => prev.filter((m) => m.id !== msgId));
+              }}
+              onBackToSidebar={() => setMobileScreen('sidebar')}
+              onOpenGroupManagement={(room) => setManagingGroup(room)}
+            />
+          </div>
         )}
       </div>
 
@@ -1076,11 +1186,24 @@ export default function App() {
         />
       )}
 
+      {/* Simple Registration & Login Modal */}
+      {isAuthModalOpen && (
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          onAuthSuccess={(authenticatedUser) => {
+            setCurrentUser(authenticatedUser);
+            saveUserRealtime(authenticatedUser, selfPeerId).catch(console.error);
+          }}
+        />
+      )}
+
       {/* Profile & Presence Modal */}
       {isProfileModalOpen && (
         <UserProfileModal
           currentUser={currentUser}
           onClose={() => setIsProfileModalOpen(false)}
+          onOpenAuthModal={() => setIsAuthModalOpen(true)}
           onSave={(updates) => {
             const updated = {
               ...currentUser,
@@ -1092,13 +1215,26 @@ export default function App() {
         />
       )}
 
-      {/* Create Channel Modal */}
+      {/* Create Channel / Group Modal */}
       {isCreateChannelOpen && (
         <CreateChannelModal
           onClose={() => setIsCreateChannelOpen(false)}
           onCreate={handleCreateRoom}
           availableUsers={users}
           currentUserId={currentUser.id}
+        />
+      )}
+
+      {/* Group Management Modal */}
+      {managingGroup && (
+        <GroupManagementModal
+          group={managingGroup}
+          currentUser={currentUser}
+          allUsers={users}
+          onClose={() => setManagingGroup(null)}
+          onGroupUpdated={() => {
+            // Updated group re-syncs through onSnapshot
+          }}
         />
       )}
 

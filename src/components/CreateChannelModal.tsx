@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Hash, Video, Users, Sparkles, Check, Globe2, Shield } from 'lucide-react';
+import { X, Hash, Video, Users, Sparkles, Check, Globe2, Shield, Lock } from 'lucide-react';
 import { User } from '../types';
 
 interface CreateChannelModalProps {
@@ -9,6 +9,8 @@ interface CreateChannelModalProps {
     description: string;
     type: 'text' | 'voice-video';
     isCustomGroup: boolean;
+    isPrivate?: boolean;
+    requiresApproval?: boolean;
     icon?: string;
     category?: string;
     memberIds?: string[];
@@ -17,8 +19,7 @@ interface CreateChannelModalProps {
   currentUserId?: string;
 }
 
-const PRESET_ICONS = ['💬', '🚀', '🌍', '🎨', '⚡', '🎮', '💡', '🎵', '☕', '🔥', '🎙️', '🤖'];
-
+const PRESET_ICONS = ['💬', '🚀', '🌍', '🎨', '⚡', '🎮', '💡', '🎵', '☕', '🔥', '🎙️', '🤖', '👥', '🌐'];
 const PRESET_CATEGORIES = ['General', 'Engineering', 'Design', 'Community', 'Gaming', 'Hangout'];
 
 export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
@@ -33,9 +34,10 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
   const [description, setDescription] = useState('');
   const [selectedIcon, setSelectedIcon] = useState('💬');
   const [category, setCategory] = useState('Community');
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [requiresApproval, setRequiresApproval] = useState(false);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
 
-  // Other users available to add to group
   const otherUsers = availableUsers.filter((u) => u.id !== currentUserId);
 
   const toggleMember = (userId: string) => {
@@ -53,6 +55,8 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
       description: description.trim(),
       type,
       isCustomGroup: kind === 'group',
+      isPrivate: kind === 'group' ? isPrivate : false,
+      requiresApproval: kind === 'group' ? requiresApproval : false,
       icon: selectedIcon,
       category,
       memberIds: kind === 'group' ? [currentUserId || '', ...selectedMemberIds].filter(Boolean) : [],
@@ -61,8 +65,11 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative my-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+      <div 
+        className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative my-auto animate-in fade-in zoom-in-95 duration-150"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
           onClick={onClose}
           className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
@@ -76,12 +83,12 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
             Create Channel or Group
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Create a custom group or topic channel accessible to people worldwide in real time.
+            Connect people across continents with real-time text, voice notes, and live video stages.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Step 1: Channel vs Group */}
+          {/* Format */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">Format</label>
             <div className="grid grid-cols-2 gap-2.5">
@@ -100,7 +107,7 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                 <Globe2 className="w-4 h-4 mt-0.5 text-blue-400 shrink-0" />
                 <div>
                   <div className="text-xs font-semibold">Public Channel</div>
-                  <div className="text-[11px] text-slate-500">Open community channel visible to all peers.</div>
+                  <div className="text-[11px] text-slate-500">Open global channel discoverable by all users.</div>
                 </div>
               </button>
 
@@ -119,13 +126,50 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                 <Users className="w-4 h-4 mt-0.5 text-purple-400 shrink-0" />
                 <div>
                   <div className="text-xs font-semibold">Custom Group</div>
-                  <div className="text-[11px] text-slate-500">Private squad with selected peers & members.</div>
+                  <div className="text-[11px] text-slate-500">Manageable group with invitation & approval rules.</div>
                 </div>
               </button>
             </div>
           </div>
 
-          {/* Step 2: Medium (Text vs Live Stage) */}
+          {/* Group Privacy & Join Options */}
+          {kind === 'group' && (
+            <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-xl space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-400" />
+                    Private Group
+                  </span>
+                  <p className="text-[10px] text-slate-400">Only authorized members can view and send messages</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={isPrivate}
+                  onChange={(e) => setIsPrivate(e.target.checked)}
+                  className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
+                />
+              </div>
+
+              <div className="flex items-center justify-between border-t border-slate-800/80 pt-2">
+                <div>
+                  <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
+                    <Shield className="w-3.5 h-3.5 text-blue-400" />
+                    Require Admin Approval to Join
+                  </span>
+                  <p className="text-[10px] text-slate-400">New joiners must submit a request for admin review</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={requiresApproval}
+                  onChange={(e) => setRequiresApproval(e.target.checked)}
+                  className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Communication Medium */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5">Communication Medium</label>
             <div className="grid grid-cols-2 gap-2.5">
@@ -141,7 +185,7 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                 <Hash className="w-4 h-4 text-blue-400 shrink-0" />
                 <div>
                   <div className="text-xs font-semibold">Text & Media</div>
-                  <div className="text-[10px] text-slate-500">Chat, voice notes & files</div>
+                  <div className="text-[10px] text-slate-500">Persistent chat, images, voice notes</div>
                 </div>
               </button>
 
@@ -157,35 +201,32 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                 <Video className="w-4 h-4 text-emerald-400 shrink-0" />
                 <div>
                   <div className="text-xs font-semibold">Live Stage & Call</div>
-                  <div className="text-[10px] text-slate-500">24/7 video & audio stage</div>
+                  <div className="text-[10px] text-slate-500">24/7 video and audio stage</div>
                 </div>
               </button>
             </div>
           </div>
 
-          {/* Icon and Name */}
+          {/* Name & Icon */}
           <div className="space-y-2">
             <label className="block text-xs font-semibold text-slate-300">
               {kind === 'group' ? 'Group Name' : 'Channel Name'}
             </label>
-            <div className="flex items-center gap-2">
-              {/* Icon Picker Pop */}
-              <div className="flex items-center gap-1 overflow-x-auto py-1 max-w-full">
-                {PRESET_ICONS.map((emoji) => (
-                  <button
-                    key={emoji}
-                    type="button"
-                    onClick={() => setSelectedIcon(emoji)}
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 transition-transform ${
-                      selectedIcon === emoji
-                        ? 'bg-blue-600/30 border border-blue-400 scale-110'
-                        : 'bg-slate-950 border border-slate-800 hover:bg-slate-800'
-                    }`}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center gap-1 overflow-x-auto py-1">
+              {PRESET_ICONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  onClick={() => setSelectedIcon(emoji)}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0 transition-transform ${
+                    selectedIcon === emoji
+                      ? 'bg-blue-600/30 border border-blue-400 scale-110'
+                      : 'bg-slate-950 border border-slate-800 hover:bg-slate-800'
+                  }`}
+                >
+                  {emoji}
+                </button>
+              ))}
             </div>
 
             <div className="relative">
@@ -194,11 +235,7 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={
-                  kind === 'group'
-                    ? 'e.g. Frontend Core Squad or Kigali Tech Circle'
-                    : 'e.g. cross-border-collab or mobile-dev'
-                }
+                placeholder={kind === 'group' ? 'e.g. Pan-Africa Tech Network' : 'e.g. global-dialogue'}
                 required
                 maxLength={80}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
@@ -229,23 +266,23 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Brief purpose or topic"
+                placeholder="Brief purpose"
                 maxLength={200}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
 
-          {/* If Custom Group: Select Members */}
+          {/* If Custom Group: Select initial members */}
           {kind === 'group' && otherUsers.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-slate-300">Add Peers to Group</label>
+                <label className="text-xs font-semibold text-slate-300">Initial Members</label>
                 <span className="text-[10px] text-slate-400">
                   {selectedMemberIds.length} selected
                 </span>
               </div>
-              <div className="max-h-32 overflow-y-auto space-y-1 bg-slate-950 border border-slate-800 rounded-xl p-2">
+              <div className="max-h-28 overflow-y-auto space-y-1 bg-slate-950 border border-slate-800 rounded-xl p-2">
                 {otherUsers.map((user) => {
                   const isSelected = selectedMemberIds.includes(user.id);
                   return (
@@ -266,10 +303,8 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
                         />
                         <div className="truncate">
                           <span className="font-medium truncate block">{user.name}</span>
-                          {user.location && (
-                            <span className="text-[10px] text-slate-500 truncate block">
-                              {user.location.flag} {user.location.city}
-                            </span>
+                          {user.username && (
+                            <span className="text-[10px] text-slate-500 truncate block">@{user.username}</span>
                           )}
                         </div>
                       </div>
@@ -289,7 +324,7 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
             </div>
           )}
 
-          {/* Buttons */}
+          {/* Footer Buttons */}
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
             <button
               type="button"
@@ -301,7 +336,7 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
             <button
               type="submit"
               disabled={!name.trim()}
-              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg transition-colors flex items-center gap-1.5"
+              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-md shadow-blue-500/20"
             >
               <span>{kind === 'group' ? 'Create Group' : 'Create Channel'}</span>
             </button>

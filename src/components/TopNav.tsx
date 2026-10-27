@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Radio, 
   MessageSquare, 
@@ -9,9 +9,12 @@ import {
   Menu,
   CheckCircle2, 
   AlertCircle,
-  Globe2 
+  Globe2,
+  Bell,
+  UserPlus
 } from 'lucide-react';
-import { User, ViewTab, ActiveCall } from '../types';
+import { User, ViewTab, ActiveCall, InAppNotification } from '../types';
+import { NotificationDropdown } from './NotificationDropdown';
 
 interface TopNavProps {
   currentUser: User;
@@ -20,10 +23,13 @@ interface TopNavProps {
   activeCalls: ActiveCall[];
   onOpenProfile: () => void;
   onOpenMultiTab: () => void;
+  onOpenAuthModal?: () => void;
   isConnected: boolean;
   onlineCount: number;
   onToggleMobileSidebar?: () => void;
   isMobileSidebarOpen?: boolean;
+  notifications?: InAppNotification[];
+  onSelectNotification?: (notif: InAppNotification) => void;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({
@@ -33,15 +39,20 @@ export const TopNav: React.FC<TopNavProps> = ({
   activeCalls,
   onOpenProfile,
   onOpenMultiTab,
+  onOpenAuthModal,
   isConnected,
   onlineCount,
   onToggleMobileSidebar,
   isMobileSidebarOpen,
+  notifications = [],
+  onSelectNotification,
 }) => {
   const ongoingCallsCount = activeCalls.length;
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const unreadNotifCount = notifications.filter((n) => !n.read).length;
 
   return (
-    <header className="h-14 border-b border-slate-800 bg-slate-950 px-3 md:px-6 flex items-center justify-between shrink-0 select-none z-30">
+    <header className="h-14 border-b border-slate-800 bg-slate-950 px-3 md:px-6 flex items-center justify-between shrink-0 select-none z-30 relative">
       {/* Zone 1: Branding, Mobile Toggle & Real-Time Presence Indicator */}
       <div className="flex items-center gap-2 md:gap-3 min-w-0">
         {onToggleMobileSidebar && (
@@ -70,7 +81,7 @@ export const TopNav: React.FC<TopNavProps> = ({
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span className="font-semibold text-emerald-400 tabular-nums">
-                {onlineCount} {onlineCount === 1 ? 'online' : 'online'}
+                {onlineCount} online
               </span>
               <span className="hidden sm:inline text-slate-600" aria-hidden="true">·</span>
               <span className="hidden sm:inline text-slate-400">Cloud Live</span>
@@ -150,7 +161,51 @@ export const TopNav: React.FC<TopNavProps> = ({
       </nav>
 
       {/* Zone 3: Actions & User Profile */}
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+        {/* Register / Sign In button if guest or testing */}
+        {onOpenAuthModal && (
+          <button
+            onClick={onOpenAuthModal}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-lg shadow-sm shadow-blue-500/20 transition-all active:scale-95"
+            title="Register or Sign in with Email & Password"
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Register / Sign In</span>
+          </button>
+        )}
+
+        {/* Notifications Bell */}
+        <div className="relative">
+          <button
+            onClick={() => setIsNotifOpen(!isNotifOpen)}
+            className={`p-1.5 rounded-lg transition-colors relative ${
+              isNotifOpen 
+                ? 'bg-slate-800 text-white' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+            title="Notifications"
+          >
+            <Bell className="w-4 h-4" />
+            {unreadNotifCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-blue-600 text-white text-[9px] font-bold flex items-center justify-center animate-pulse">
+                {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+              </span>
+            )}
+          </button>
+
+          {isNotifOpen && (
+            <NotificationDropdown
+              isOpen={isNotifOpen}
+              onClose={() => setIsNotifOpen(false)}
+              notifications={notifications}
+              currentUserId={currentUser.id}
+              onSelectNotification={(notif) => {
+                if (onSelectNotification) onSelectNotification(notif);
+              }}
+            />
+          )}
+        </div>
+
         {/* Multi-Device Testing Helper */}
         <button
           onClick={onOpenMultiTab}
@@ -198,7 +253,7 @@ export const TopNav: React.FC<TopNavProps> = ({
               {currentUser.name}
             </span>
             <span className="text-[10px] text-slate-400 truncate">
-              {currentUser.location?.flag || '🇷🇼'} {currentUser.location?.city || 'Kigali'}
+              {currentUser.username ? `@${currentUser.username}` : (currentUser.location?.city || 'Elie Chat')}
             </span>
           </div>
         </button>

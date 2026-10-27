@@ -10,14 +10,17 @@ export interface UserLocation {
 export interface User {
   id: string;
   name: string;
+  username?: string;
   avatar: string;
   email?: string;
   status: 'online' | 'away' | 'busy' | 'in-call' | 'offline';
   customStatus?: string;
   location?: UserLocation;
   peerId?: string;
+  readReceiptsEnabled?: boolean;
   lastActive: number;
   lastSeen?: number;
+  createdAt?: number;
 }
 
 export interface Message {
@@ -41,6 +44,7 @@ export interface Message {
   };
   status?: 'sent' | 'delivered' | 'read';
   readBy?: string[];
+  readAt?: number;
   timestamp: number;
 }
 
@@ -56,13 +60,55 @@ export interface Room {
   icon?: string;
   isCustomGroup?: boolean;
   isPrivate?: boolean;
+  requiresApproval?: boolean;
   memberIds?: string[];
+  adminIds?: string[];
   activeCall?: {
     callId: string;
     callType: 'audio' | 'video';
     startedAt: number;
     participants: string[];
   };
+}
+
+export interface GroupInvitation {
+  id: string;
+  groupId: string;
+  groupName: string;
+  groupIcon?: string;
+  inviterId: string;
+  inviterName: string;
+  inviteeId: string;
+  inviteeName?: string;
+  status: 'pending' | 'accepted' | 'declined';
+  createdAt: number;
+}
+
+export interface JoinRequest {
+  id: string;
+  groupId: string;
+  groupName: string;
+  requesterId: string;
+  requesterName: string;
+  requesterAvatar?: string;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: number;
+  reviewedBy?: string;
+  reviewedAt?: number;
+}
+
+export interface InAppNotification {
+  id: string;
+  recipientId: string;
+  type: 'message' | 'invitation' | 'join_request' | 'request_approved' | 'request_rejected';
+  title: string;
+  message: string;
+  targetId?: string;
+  isGroup?: boolean;
+  senderId?: string;
+  senderName?: string;
+  read: boolean;
+  createdAt: number;
 }
 
 export interface CallParticipant {

@@ -19,7 +19,8 @@ import {
   Trash2,
   ArrowLeft,
   Check,
-  CheckCheck
+  CheckCheck,
+  Settings
 } from 'lucide-react';
 import { Message, User, Room } from '../types';
 import { formatLastSeen } from '../utils/userSync';
@@ -45,6 +46,7 @@ interface ChatAreaProps {
   onDeleteRoom?: (roomId: string) => void;
   onDeleteMessage?: (messageId: string) => void;
   onBackToSidebar?: () => void;
+  onOpenGroupManagement?: (room: Room) => void;
 }
 
 const COMMON_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🚀', '👀'];
@@ -63,6 +65,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onDeleteRoom,
   onDeleteMessage,
   onBackToSidebar,
+  onOpenGroupManagement,
 }) => {
   const [inputText, setInputText] = useState('');
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -365,6 +368,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         {/* Action Buttons: Voice / Video Call & Delete Room */}
         <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
+          {isRoom && currentRoom && currentRoom.isCustomGroup && onOpenGroupManagement && (
+            <button
+              onClick={() => onOpenGroupManagement(currentRoom)}
+              title="Group settings & members"
+              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-colors flex items-center gap-1 text-xs"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Settings</span>
+            </button>
+          )}
+
           {isRoom && currentRoom && currentRoom.createdById === currentUser.id && onDeleteRoom && (
             <button
               onClick={() => {
@@ -527,16 +541,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       <p className="whitespace-pre-wrap">{msg.text}</p>
                     )}
 
-                    {/* Delivery & Read Receipts for own messages */}
+                    {/* Accurate Delivery & Read Receipts for own messages */}
                     {isMe && (
-                      <div className="flex items-center justify-end gap-1 mt-1 text-[10px] opacity-80">
+                      <div className="flex items-center justify-end gap-1 mt-1 text-[10px]">
                         {msg.status === 'read' ? (
-                          <span className="flex items-center gap-0.5 text-blue-200" title="Read">
-                            <CheckCheck className="w-3.5 h-3.5" />
+                          <span 
+                            className="flex items-center gap-0.5 text-sky-300 font-semibold" 
+                            title={msg.readAt ? `Read ${new Date(msg.readAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Read'}
+                          >
+                            <CheckCheck className="w-3.5 h-3.5 text-sky-300" />
+                          </span>
+                        ) : msg.status === 'delivered' ? (
+                          <span 
+                            className="flex items-center gap-0.5 text-slate-300" 
+                            title="Delivered"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5 text-slate-300" />
                           </span>
                         ) : (
-                          <span className="flex items-center gap-0.5 text-white/80" title="Delivered">
-                            <Check className="w-3.5 h-3.5" />
+                          <span 
+                            className="flex items-center gap-0.5 text-slate-400" 
+                            title="Sent"
+                          >
+                            <Check className="w-3.5 h-3.5 text-slate-400" />
                           </span>
                         )}
                       </div>

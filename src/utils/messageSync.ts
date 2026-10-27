@@ -30,6 +30,7 @@ export async function saveMessageRealtime(message: Message): Promise<void> {
       isGroup: Boolean(message.isGroup),
       senderId: message.senderId,
       senderName: message.senderName,
+      status: message.status || 'sent',
       timestamp: message.timestamp || Date.now(),
     };
 
@@ -41,8 +42,8 @@ export async function saveMessageRealtime(message: Message): Promise<void> {
     if (message.voiceDuration !== undefined) data.voiceDuration = message.voiceDuration;
     if (message.replyTo) data.replyTo = message.replyTo;
     if (message.reactions) data.reactions = message.reactions;
-    if (message.status) data.status = message.status;
     if (message.readBy) data.readBy = message.readBy;
+    if (message.readAt) data.readAt = message.readAt;
 
     await setDoc(doc(db, 'messages', message.id), data);
   } catch (error) {
@@ -84,14 +85,15 @@ export function subscribeConversationMessages(
               voiceDuration: d.voiceDuration,
               reactions: d.reactions || {},
               replyTo: d.replyTo,
-              status: d.status || 'delivered',
+              status: d.status || 'sent',
               readBy: Array.isArray(d.readBy) ? d.readBy : [],
+              readAt: typeof d.readAt === 'number' ? d.readAt : undefined,
               timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
             });
           }
         });
 
-        // In-memory chronological sort (safely avoids complex Firestore composite index requirements)
+        // Chronological sort
         list.sort((a, b) => a.timestamp - b.timestamp);
         onMessagesUpdate(list);
       },
@@ -139,8 +141,9 @@ export function subscribeAllMessagesRealtime(
               voiceDuration: d.voiceDuration,
               reactions: d.reactions || {},
               replyTo: d.replyTo,
-              status: d.status || 'delivered',
+              status: d.status || 'sent',
               readBy: Array.isArray(d.readBy) ? d.readBy : [],
+              readAt: typeof d.readAt === 'number' ? d.readAt : undefined,
               timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
             });
           }
@@ -161,6 +164,56 @@ export function subscribeAllMessagesRealtime(
   }
 }
 
+// Mark messages as delivered when recipient's client synchronizes them
+export async function markMessagesAsDeliveredRealtime(
+  messages: Message[],
+  currentUserId: string
+): Promise<void> {
+  const undelivered = messages.filter(
+    (m) => m.senderId !== currentUserId && m.status === 'sent'
+  );
+
+  for (const m of undelivered) {
+    try {
+      await updateDoc(doc(db, 'messages', m.id), {
+        status: 'delivered',
+      });
+    } catch {
+      // ignore concurrent update
+    }
+  }
+}
+
+// Mark messages as read when recipient opens and views the conversation
+export async function markMessagesAsReadRealtime(
+  messages: Message[],
+  currentUserId: string,
+  readReceiptsEnabled: boolean = true
+): Promise<void> {
+  const unreadMessages = messages.filter(
+    (m) => m.senderId !== currentUserId && (!m.readBy || !m.readBy.includes(currentUserId))
+  );
+
+  for (const m of unreadMessages) {
+    try {
+      const updates: Record<string, any> = {
+        readBy: arrayUnion(currentUserId),
+      };
+
+      if (readReceiptsEnabled) {
+        updates.status = 'read';
+        updates.readAt = Date.now();
+      } else if (m.status === 'sent') {
+        updates.status = 'delivered';
+      }
+
+      await updateDoc(doc(db, 'messages', m.id), updates);
+    } catch {
+      // ignore concurrent update
+    }
+  }
+}
+
 export async function updateMessageReactionsRealtime(
   messageId: string, 
   reactions: Record<string, string[]>
@@ -172,26 +225,6 @@ export async function updateMessageReactionsRealtime(
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
-  }
-}
-
-export async function markMessagesAsReadRealtime(
-  messages: Message[],
-  currentUserId: string
-): Promise<void> {
-  const unreadMessages = messages.filter(
-    (m) => m.senderId !== currentUserId && (!m.readBy || !m.readBy.includes(currentUserId))
-  );
-
-  for (const m of unreadMessages) {
-    try {
-      await updateDoc(doc(db, 'messages', m.id), {
-        status: 'read',
-        readBy: arrayUnion(currentUserId),
-      });
-    } catch (e) {
-      // ignore concurrent read receipt update
-    }
   }
 }
 

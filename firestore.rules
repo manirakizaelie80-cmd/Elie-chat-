@@ -10,17 +10,24 @@ service cloud.firestore {
       return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidUsernameId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 50 && id.matches('^[a-z0-9_\\-]+$');
+    }
+
     function isValidUser(data) {
       return data.keys().hasAll(['id', 'name', 'status'])
         && data.id is string && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
         && data.status in ['online', 'away', 'busy', 'in-call', 'offline']
+        && (!('username' in data) || (data.username is string && data.username.size() <= 50))
         && (!('email' in data) || (data.email is string && data.email.size() <= 150))
         && (!('customStatus' in data) || (data.customStatus is string && data.customStatus.size() <= 150))
         && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1000))
         && (!('peerId' in data) || (data.peerId is string && data.peerId.size() <= 150))
+        && (!('readReceiptsEnabled' in data) || data.readReceiptsEnabled is bool)
         && (!('lastActive' in data) || data.lastActive is number)
-        && (!('lastSeen' in data) || data.lastSeen is number);
+        && (!('lastSeen' in data) || data.lastSeen is number)
+        && (!('createdAt' in data) || data.createdAt is number);
     }
 
     function isValidRoom(data) {
@@ -36,7 +43,9 @@ service cloud.firestore {
         && (!('icon' in data) || (data.icon is string && data.icon.size() <= 10))
         && (!('isCustomGroup' in data) || data.isCustomGroup is bool)
         && (!('isPrivate' in data) || data.isPrivate is bool)
-        && (!('memberIds' in data) || data.memberIds is list);
+        && (!('requiresApproval' in data) || data.requiresApproval is bool)
+        && (!('memberIds' in data) || data.memberIds is list)
+        && (!('adminIds' in data) || data.adminIds is list);
     }
 
     function isValidMessage(data) {
@@ -55,7 +64,8 @@ service cloud.firestore {
         && (!('voiceAudio' in data) || (data.voiceAudio is string && data.voiceAudio.size() <= 500000))
         && (!('voiceDuration' in data) || data.voiceDuration is number)
         && (!('status' in data) || data.status in ['sent', 'delivered', 'read'])
-        && (!('readBy' in data) || data.readBy is list);
+        && (!('readBy' in data) || data.readBy is list)
+        && (!('readAt' in data) || data.readAt is number);
     }
 
     function isValidCall(data) {
@@ -72,10 +82,64 @@ service cloud.firestore {
         && (!('endedAt' in data) || data.endedAt is number);
     }
 
-    // Public user directory for Elie Chat global presence & location discovery
+    function isValidInvitation(data) {
+      return data.keys().hasAll(['id', 'groupId', 'groupName', 'inviterId', 'inviteeId', 'status', 'createdAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.groupId is string && data.groupId.size() <= 128
+        && data.groupName is string && data.groupName.size() <= 100
+        && data.inviterId is string && data.inviterId.size() <= 128
+        && data.inviteeId is string && data.inviteeId.size() <= 128
+        && data.status in ['pending', 'accepted', 'declined']
+        && data.createdAt is number
+        && (!('groupIcon' in data) || (data.groupIcon is string && data.groupIcon.size() <= 10))
+        && (!('inviterName' in data) || (data.inviterName is string && data.inviterName.size() <= 100))
+        && (!('inviteeName' in data) || (data.inviteeName is string && data.inviteeName.size() <= 100));
+    }
+
+    function isValidJoinRequest(data) {
+      return data.keys().hasAll(['id', 'groupId', 'groupName', 'requesterId', 'status', 'createdAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.groupId is string && data.groupId.size() <= 128
+        && data.groupName is string && data.groupName.size() <= 100
+        && data.requesterId is string && data.requesterId.size() <= 128
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.createdAt is number
+        && (!('requesterName' in data) || (data.requesterName is string && data.requesterName.size() <= 100))
+        && (!('requesterAvatar' in data) || (data.requesterAvatar is string && data.requesterAvatar.size() <= 1000))
+        && (!('reviewedBy' in data) || (data.reviewedBy is string && data.reviewedBy.size() <= 128))
+        && (!('reviewedAt' in data) || data.reviewedAt is number);
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'recipientId', 'type', 'title', 'message', 'read', 'createdAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.recipientId is string && data.recipientId.size() <= 128
+        && data.type in ['message', 'invitation', 'join_request', 'request_approved', 'request_rejected']
+        && data.title is string && data.title.size() <= 100
+        && data.message is string && data.message.size() <= 300
+        && data.read is bool
+        && data.createdAt is number
+        && (!('targetId' in data) || (data.targetId is string && data.targetId.size() <= 128))
+        && (!('isGroup' in data) || data.isGroup is bool)
+        && (!('senderId' in data) || (data.senderId is string && data.senderId.size() <= 128))
+        && (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 100));
+    }
+
+    // Public user directory for Elie Chat global presence & discovery
     match /users/{userId} {
       allow read: if true;
       allow create, update: if isValidId(userId) && isValidUser(request.resource.data) && request.resource.data.id == userId;
+      allow delete: if false;
+    }
+
+    // Unique username registry
+    match /usernames/{username} {
+      allow read: if true;
+      allow create: if isValidUsernameId(username)
+        && request.resource.data.keys().hasAll(['username', 'uid'])
+        && request.resource.data.username == username
+        && request.resource.data.uid is string;
+      allow update: if false;
       allow delete: if false;
     }
 
@@ -92,6 +156,30 @@ service cloud.firestore {
       allow create: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
       allow update: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
       allow delete: if isValidId(messageId);
+    }
+
+    // Group invitations
+    match /group_invitations/{invitationId} {
+      allow read: if true;
+      allow create: if isValidId(invitationId) && isValidInvitation(request.resource.data) && request.resource.data.id == invitationId;
+      allow update: if isValidId(invitationId) && isValidInvitation(request.resource.data) && request.resource.data.id == invitationId;
+      allow delete: if isValidId(invitationId);
+    }
+
+    // Join requests
+    match /join_requests/{requestId} {
+      allow read: if true;
+      allow create: if isValidId(requestId) && isValidJoinRequest(request.resource.data) && request.resource.data.id == requestId;
+      allow update: if isValidId(requestId) && isValidJoinRequest(request.resource.data) && request.resource.data.id == requestId;
+      allow delete: if isValidId(requestId);
+    }
+
+    // In-app notifications
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow create: if isValidId(notificationId) && isValidNotification(request.resource.data) && request.resource.data.id == notificationId;
+      allow update: if isValidId(notificationId) && isValidNotification(request.resource.data) && request.resource.data.id == notificationId;
+      allow delete: if isValidId(notificationId);
     }
 
     // WebRTC Real-Time Call Signaling

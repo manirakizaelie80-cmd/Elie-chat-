@@ -1,19 +1,37 @@
-import React, { useState } from 'react';
-import { X, Check, MapPin, LogIn, LogOut, Copy, UserCheck, Sparkles, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { 
+  X, 
+  Check, 
+  MapPin, 
+  LogIn, 
+  LogOut, 
+  Copy, 
+  UserCheck, 
+  Sparkles, 
+  AtSign, 
+  Eye, 
+  EyeOff, 
+  CheckCheck,
+  UserPlus,
+  Loader2
+} from 'lucide-react';
 import { User, UserLocation } from '../types';
-import { loginWithGoogle, logoutUser } from '../utils/auth';
+import { loginWithGoogle, logoutUser, checkUsernameAvailable, validateUsername } from '../utils/auth';
 
 interface UserProfileModalProps {
   currentUser: User;
   onClose: () => void;
   onSave: (updates: { 
     name: string; 
+    username?: string;
     avatar: string; 
     status: 'online' | 'away' | 'busy' | 'offline'; 
     customStatus: string;
+    readReceiptsEnabled?: boolean;
     location?: UserLocation;
   }) => void;
   onSwitchPersona?: (personaKey: string) => void;
+  onOpenAuthModal?: () => void;
 }
 
 const PRESET_AVATARS = [
@@ -39,13 +57,18 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   onClose,
   onSave,
   onSwitchPersona,
+  onOpenAuthModal,
 }) => {
   const [name, setName] = useState(currentUser.name);
+  const [username, setUsername] = useState(currentUser.username || '');
   const [avatar, setAvatar] = useState(currentUser.avatar);
-  const [status, setStatus] = useState<'online' | 'away' | 'busy'>(
+  const [status, setStatus] = useState<'online' | 'away' | 'busy' | 'offline'>(
     currentUser.status === 'in-call' ? 'online' : (currentUser.status === 'offline' ? 'online' : currentUser.status)
   );
   const [customStatus, setCustomStatus] = useState(currentUser.customStatus || '');
+  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(
+    currentUser.readReceiptsEnabled !== false
+  );
   const [selectedLocation, setSelectedLocation] = useState<UserLocation>(
     currentUser.location || PRESET_LOCATIONS[0]
   );
@@ -53,14 +76,56 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // Username availability check
+  const [usernameChecking, setUsernameChecking] = useState(false);
+  const [usernameStatus, setUsernameStatus] = useState<{ available: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    if (!username.trim() || username.trim() === currentUser.username) {
+      setUsernameStatus(null);
+      return;
+    }
+
+    const { valid, error } = validateUsername(username);
+    if (!valid) {
+      setUsernameStatus({ available: false, message: error || 'Invalid username' });
+      return;
+    }
+
+    setUsernameChecking(true);
+    const timer = setTimeout(async () => {
+      try {
+        const available = await checkUsernameAvailable(username);
+        setUsernameStatus({
+          available,
+          message: available ? `@${username} is available` : `@${username} is already taken`,
+        });
+      } catch {
+        setUsernameStatus(null);
+      } finally {
+        setUsernameChecking(false);
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [username, currentUser.username]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+
+    if (usernameStatus && !usernameStatus.available) {
+      setAuthError('Please choose an available username before saving.');
+      return;
+    }
+
     onSave({
       name: name.trim(),
+      username: username.trim() || undefined,
       avatar,
       status,
       customStatus: customStatus.trim(),
+      readReceiptsEnabled,
       location: selectedLocation,
     });
     onClose();
@@ -76,9 +141,11 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         if (user.photoURL) setAvatar(user.photoURL);
         onSave({
           name: user.displayName || name,
+          username: username.trim() || undefined,
           avatar: user.photoURL || avatar,
           status: 'online',
           customStatus: customStatus || '⚡ Connected via Google Auth',
+          readReceiptsEnabled,
           location: selectedLocation,
         });
       }
@@ -94,9 +161,11 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       await logoutUser();
       onSave({
         name,
+        username,
         avatar,
         status: 'offline',
         customStatus: 'Logged out',
+        readReceiptsEnabled,
         location: selectedLocation,
       });
       onClose();
@@ -113,8 +182,11 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl relative my-8 space-y-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+      <div 
+        className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-4 sm:p-6 shadow-2xl relative my-auto space-y-4 animate-in fade-in zoom-in-95 duration-150"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
           onClick={onClose}
           className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
@@ -128,28 +200,28 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             User Account & Profile
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Manage your authenticated identity, worldwide presence, and profile details.
+            Manage your authenticated identity, username, presence, and privacy settings.
           </p>
         </div>
 
-        {/* Firebase Authentication Card */}
+        {/* Authentication Card */}
         <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-400">Firebase Account:</span>
+            <span className="text-slate-400">Account Status:</span>
             {currentUser.email ? (
               <span className="text-emerald-400 font-medium flex items-center gap-1 truncate max-w-[200px]">
                 <UserCheck className="w-3.5 h-3.5" />
                 <span className="truncate">{currentUser.email}</span>
               </span>
             ) : (
-              <span className="text-slate-400 font-medium">Guest / Profile Mode</span>
+              <span className="text-slate-400 font-medium">Session Active</span>
             )}
           </div>
 
-          <div className="flex items-center justify-between gap-2 pt-1">
+          <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
             <div className="flex items-center gap-1.5 text-xs text-slate-400 truncate">
               <span className="font-mono text-[11px] bg-slate-900 px-2 py-0.5 rounded border border-slate-800 truncate">
-                ID: {currentUser.id.substring(0, 16)}...
+                UID: {currentUser.id.substring(0, 14)}...
               </span>
               <button
                 type="button"
@@ -161,26 +233,42 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               </button>
             </div>
 
-            {currentUser.email ? (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="px-2.5 py-1 text-xs text-red-400 hover:bg-red-950/40 border border-red-900/50 rounded-lg flex items-center gap-1 transition-colors"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Log out</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                disabled={isAuthLoading}
-                className="px-3 py-1 bg-white hover:bg-slate-100 text-slate-900 font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow transition-colors"
-              >
-                <LogIn className="w-3.5 h-3.5 text-blue-600" />
-                <span>{isAuthLoading ? 'Signing in...' : 'Sign in with Google'}</span>
-              </button>
-            )}
+            <div className="flex items-center gap-1.5">
+              {onOpenAuthModal && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenAuthModal();
+                  }}
+                  className="px-2.5 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded-lg flex items-center gap-1 transition-colors font-medium shadow-sm"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Register / Sign In</span>
+                </button>
+              )}
+
+              {currentUser.email ? (
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="px-2 py-1 text-xs text-red-400 hover:bg-red-950/40 border border-red-900/50 rounded-lg flex items-center gap-1 transition-colors"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Log out</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleGoogleSignIn}
+                  disabled={isAuthLoading}
+                  className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-900 font-semibold text-xs rounded-lg flex items-center gap-1 shadow transition-colors"
+                >
+                  <LogIn className="w-3 h-3 text-blue-600" />
+                  <span>Google</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {authError && (
@@ -188,11 +276,11 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           )}
         </div>
 
-        {/* Form for Profile Updates */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Profile Edit Form */}
+        <form onSubmit={handleSubmit} className="space-y-3.5 max-h-[60vh] overflow-y-auto pr-1">
           {/* Avatar Selection */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-2">Avatar</label>
+            <label className="block text-xs font-semibold text-slate-300 mb-2">Profile Picture</label>
             <div className="flex items-center gap-3">
               {PRESET_AVATARS.map((p) => (
                 <div
@@ -207,7 +295,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                     src={p.url}
                     alt={p.label}
                     referrerPolicy="no-referrer"
-                    className="w-12 h-12 rounded-full object-cover"
+                    className="w-11 h-11 rounded-full object-cover"
                   />
                   {avatar === p.url && (
                     <div className="absolute inset-0 bg-blue-500/20 rounded-full flex items-center justify-center text-white">
@@ -219,9 +307,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
           </div>
 
-          {/* Display Name */}
+          {/* Full Name */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Display Name</label>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Display Name</label>
             <input
               type="text"
               value={name}
@@ -229,26 +317,54 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               placeholder="e.g. Elie Manirakiza"
               required
               maxLength={80}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
             />
           </div>
 
-          {/* Custom Status Message */}
+          {/* Unique Username */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Custom Tagline / Status</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-semibold text-slate-300">Unique Username</label>
+              {usernameChecking && (
+                <span className="text-[10px] text-blue-400 flex items-center gap-1">
+                  <Loader2 className="w-2.5 h-2.5 animate-spin" /> checking
+                </span>
+              )}
+              {usernameStatus && (
+                <span className={`text-[10px] font-medium ${usernameStatus.available ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {usernameStatus.message}
+                </span>
+              )}
+            </div>
+            <div className="relative">
+              <AtSign className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_\-]/g, ''))}
+                placeholder="e.g. elie_kigali"
+                maxLength={30}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          {/* Custom Status */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Status Message / Tagline</label>
             <input
               type="text"
               value={customStatus}
               onChange={(e) => setCustomStatus(e.target.value)}
-              placeholder="e.g. 🌍 Connecting from Kigali · Tech Enthusiast"
+              placeholder="e.g. 🌍 Building Elie Chat · Kigali, Rwanda"
               maxLength={120}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
             />
           </div>
 
-          {/* Availability Status */}
+          {/* Presence Status */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Presence Status</label>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Presence Status</label>
             <div className="grid grid-cols-3 gap-2">
               {(['online', 'away', 'busy'] as const).map((s) => (
                 <button
@@ -272,13 +388,30 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
           </div>
 
-          {/* World Location */}
+          {/* Read Receipts Privacy Setting */}
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCheck className="w-4 h-4 text-blue-400" />
+              <div>
+                <span className="text-xs font-medium text-slate-200">Send Read Receipts</span>
+                <p className="text-[10px] text-slate-500">Show double-check status when you read messages</p>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={readReceiptsEnabled}
+              onChange={(e) => setReadReceiptsEnabled(e.target.checked)}
+              className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
+            />
+          </div>
+
+          {/* Location Selection */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
+            <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5 text-blue-400" />
-              <span>Location Coordinates</span>
+              <span>World Location (for Map Tab)</span>
             </label>
-            <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto p-1 bg-slate-950 rounded-xl border border-slate-800">
+            <div className="grid grid-cols-2 gap-1.5 max-h-24 overflow-y-auto p-1 bg-slate-950 rounded-xl border border-slate-800">
               {PRESET_LOCATIONS.map((loc) => {
                 const isSelected = selectedLocation.city === loc.city;
                 return (
@@ -300,12 +433,12 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </div>
           </div>
 
-          {/* Persona Switcher Quick Test */}
+          {/* Multi-Persona Switcher for Testing */}
           {onSwitchPersona && (
             <div className="pt-2 border-t border-slate-800">
-              <label className="block text-xs font-semibold text-slate-400 mb-1.5 flex items-center justify-between">
-                <span>Quick Test Personas (Multi-device / tabs):</span>
-                <span className="text-[10px] text-blue-400">Instant switch</span>
+              <label className="block text-xs font-semibold text-slate-400 mb-1 flex items-center justify-between">
+                <span>Multi-Account Testing Personas:</span>
+                <span className="text-[10px] text-blue-400">1-click switch</span>
               </label>
               <div className="grid grid-cols-2 gap-1.5 text-xs">
                 <button
@@ -314,7 +447,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   className="px-2 py-1 rounded bg-slate-950 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 flex items-center gap-1.5 truncate"
                 >
                   <span>🇷🇼</span>
-                  <span className="truncate">Elie (Kigali)</span>
+                  <span className="truncate">Elie (Founder)</span>
                 </button>
                 <button
                   type="button"
@@ -322,7 +455,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   className="px-2 py-1 rounded bg-slate-950 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 flex items-center gap-1.5 truncate"
                 >
                   <span>🇺🇸</span>
-                  <span className="truncate">Marcus (New York)</span>
+                  <span className="truncate">Marcus (Designer)</span>
                 </button>
                 <button
                   type="button"
@@ -330,7 +463,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   className="px-2 py-1 rounded bg-slate-950 hover:bg-slate-800 border border-slate-800 text-left text-slate-300 flex items-center gap-1.5 truncate"
                 >
                   <span>🇩🇪</span>
-                  <span className="truncate">Elena (Berlin)</span>
+                  <span className="truncate">Elena (Lead)</span>
                 </button>
                 <button
                   type="button"
@@ -355,9 +488,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </button>
             <button
               type="submit"
-              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors"
+              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors shadow-md shadow-blue-500/20"
             >
-              Save Changes
+              Save Profile
             </button>
           </div>
         </form>

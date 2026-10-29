@@ -80,8 +80,11 @@ export interface GroupInvitation {
   inviterName: string;
   inviteeId: string;
   inviteeName?: string;
-  status: 'pending' | 'accepted' | 'declined';
+  status: 'pending' | 'accepted' | 'declined' | 'revoked';
   createdAt: number;
+  respondedAt?: number;
+  revokedBy?: string;
+  revokedAt?: number;
 }
 
 export interface JoinRequest {

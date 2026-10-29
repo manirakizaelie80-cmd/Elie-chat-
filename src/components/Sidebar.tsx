@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { Room, User, ActiveCall, GroupInvitation } from '../types';
 import { formatLastSeen } from '../utils/userSync';
+import { DEFAULT_AVATAR } from '../utils/photoUpload';
 
 interface SidebarProps {
   rooms: Room[];
@@ -43,7 +44,7 @@ interface SidebarProps {
   // Group invitations and management
   pendingInvitations?: GroupInvitation[];
   onRespondInvitation?: (inv: GroupInvitation, accept: boolean) => void;
-  onOpenGroupManagement?: (group: Room) => void;
+  onOpenGroupManagement?: (group: Room, initialTab?: 'details' | 'invite' | 'requests' | 'invitations') => void;
   onRequestJoinGroup?: (group: Room) => void;
 }
 
@@ -91,15 +92,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ).length;
 
   const handleRoomClick = (room: Room) => {
-    // If room is private and user is not a member, prompt to request join or open management
-    const isMember = !room.isPrivate || (room.memberIds && room.memberIds.includes(currentUserId));
-    if (!isMember) {
-      if (onRequestJoinGroup) {
-        onRequestJoinGroup(room);
-      }
-      return;
-    }
-
     onSelectRoom(room.id);
     if (onCloseMobile) onCloseMobile();
   };
@@ -396,6 +388,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             alt={user.name}
                             referrerPolicy="no-referrer"
                             className="w-8 h-8 rounded-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src = DEFAULT_AVATAR;
+                            }}
                           />
                         ) : (
                           <div className="w-8 h-8 rounded-full bg-slate-700 text-slate-200 flex items-center justify-center text-xs font-semibold">

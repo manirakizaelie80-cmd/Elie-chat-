@@ -24,7 +24,7 @@
         "avatar": {
           "type": "string",
           "description": "Avatar image URL or path",
-          "maxLength": 1000
+          "maxLength": 500000
         },
         "email": {
           "type": "string",
@@ -279,9 +279,12 @@
         "inviteeName": { "type": "string", "maxLength": 100 },
         "status": {
           "type": "string",
-          "enum": ["pending", "accepted", "declined"]
+          "enum": ["pending", "accepted", "declined", "revoked"]
         },
-        "createdAt": { "type": "number" }
+        "createdAt": { "type": "number" },
+        "respondedAt": { "type": "number" },
+        "revokedBy": { "type": "string", "maxLength": 128 },
+        "revokedAt": { "type": "number" }
       },
       "required": ["id", "groupId", "groupName", "inviterId", "inviteeId", "status", "createdAt"]
     },

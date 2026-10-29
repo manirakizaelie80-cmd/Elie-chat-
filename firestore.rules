@@ -22,7 +22,7 @@ service cloud.firestore {
         && (!('username' in data) || (data.username is string && data.username.size() <= 50))
         && (!('email' in data) || (data.email is string && data.email.size() <= 150))
         && (!('customStatus' in data) || (data.customStatus is string && data.customStatus.size() <= 150))
-        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1000))
+        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 500000))
         && (!('peerId' in data) || (data.peerId is string && data.peerId.size() <= 150))
         && (!('readReceiptsEnabled' in data) || data.readReceiptsEnabled is bool)
         && (!('lastActive' in data) || data.lastActive is number)
@@ -89,11 +89,14 @@ service cloud.firestore {
         && data.groupName is string && data.groupName.size() <= 100
         && data.inviterId is string && data.inviterId.size() <= 128
         && data.inviteeId is string && data.inviteeId.size() <= 128
-        && data.status in ['pending', 'accepted', 'declined']
+        && data.status in ['pending', 'accepted', 'declined', 'revoked']
         && data.createdAt is number
         && (!('groupIcon' in data) || (data.groupIcon is string && data.groupIcon.size() <= 10))
         && (!('inviterName' in data) || (data.inviterName is string && data.inviterName.size() <= 100))
-        && (!('inviteeName' in data) || (data.inviteeName is string && data.inviteeName.size() <= 100));
+        && (!('inviteeName' in data) || (data.inviteeName is string && data.inviteeName.size() <= 100))
+        && (!('respondedAt' in data) || data.respondedAt is number)
+        && (!('revokedBy' in data) || (data.revokedBy is string && data.revokedBy.size() <= 128))
+        && (!('revokedAt' in data) || data.revokedAt is number);
     }
 
     function isValidJoinRequest(data) {
@@ -125,6 +128,21 @@ service cloud.firestore {
         && (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 100));
     }
 
+    function getRoom(roomId) {
+      return get(/databases/$(database)/documents/rooms/$(roomId)).data;
+    }
+
+    function isRoomAdmin(room, userId) {
+      return room.createdById == userId || (('adminIds' in room) && room.adminIds is list && (userId in room.adminIds));
+    }
+
+    function isRoomMember(room, userId) {
+      return room.isPrivate != true 
+        || room.createdById == userId 
+        || (('memberIds' in room) && room.memberIds is list && (userId in room.memberIds))
+        || (('adminIds' in room) && room.adminIds is list && (userId in room.adminIds));
+    }
+
     // Public user directory for Elie Chat global presence & discovery
     match /users/{userId} {
       allow read: if true;
@@ -143,34 +161,57 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Public & user-created channels and groups
+    // Channels and groups
     match /rooms/{roomId} {
       allow read: if true;
-      allow create, update: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId;
+      allow create: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId;
+      allow update: if isValidId(roomId) && isValidRoom(request.resource.data) && request.resource.data.id == roomId
+        && request.resource.data.createdById == resource.data.createdById;
       allow delete: if isValidId(roomId);
     }
 
-    // Real-time persistent messages for 1-on-1 and group chats
+    // Real-time persistent messages (private group messages guarded for members only)
     match /messages/{messageId} {
       allow read: if true;
-      allow create: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
+      allow create: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId
+        && (!request.resource.data.isGroup || isRoomMember(getRoom(request.resource.data.targetId), request.resource.data.senderId));
       allow update: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
       allow delete: if isValidId(messageId);
     }
 
-    // Group invitations
+    // Group invitations: any active member can invite; admins or inviter can revoke
     match /group_invitations/{invitationId} {
       allow read: if true;
-      allow create: if isValidId(invitationId) && isValidInvitation(request.resource.data) && request.resource.data.id == invitationId;
-      allow update: if isValidId(invitationId) && isValidInvitation(request.resource.data) && request.resource.data.id == invitationId;
+      allow create: if isValidId(invitationId) && isValidInvitation(request.resource.data) && request.resource.data.id == invitationId
+        && request.resource.data.status == 'pending'
+        && isRoomMember(getRoom(request.resource.data.groupId), request.resource.data.inviterId)
+        && !isRoomMember(getRoom(request.resource.data.groupId), request.resource.data.inviteeId)
+        && request.resource.data.inviterId != request.resource.data.inviteeId;
+      allow update: if isValidId(invitationId) && isValidInvitation(request.resource.data) && request.resource.data.id == invitationId
+        && resource.data.status == 'pending'
+        && request.resource.data.groupId == resource.data.groupId
+        && request.resource.data.inviteeId == resource.data.inviteeId
+        && request.resource.data.inviterId == resource.data.inviterId
+        && (
+          (request.resource.data.status in ['accepted', 'declined']) ||
+          (request.resource.data.status == 'revoked' && (isRoomAdmin(getRoom(resource.data.groupId), request.resource.data.revokedBy) || request.resource.data.revokedBy == resource.data.inviterId))
+        );
       allow delete: if isValidId(invitationId);
     }
 
-    // Join requests
+    // Join requests: created in pending; ONLY authorized group administrators can approve or reject
     match /join_requests/{requestId} {
       allow read: if true;
-      allow create: if isValidId(requestId) && isValidJoinRequest(request.resource.data) && request.resource.data.id == requestId;
-      allow update: if isValidId(requestId) && isValidJoinRequest(request.resource.data) && request.resource.data.id == requestId;
+      allow create: if isValidId(requestId) && isValidJoinRequest(request.resource.data) && request.resource.data.id == requestId
+        && request.resource.data.status == 'pending'
+        && !isRoomMember(getRoom(request.resource.data.groupId), request.resource.data.requesterId);
+      allow update: if isValidId(requestId) && isValidJoinRequest(request.resource.data) && request.resource.data.id == requestId
+        && resource.data.status == 'pending'
+        && request.resource.data.groupId == resource.data.groupId
+        && request.resource.data.requesterId == resource.data.requesterId
+        && (request.resource.data.status in ['approved', 'rejected'])
+        && request.resource.data.reviewedBy is string
+        && isRoomAdmin(getRoom(resource.data.groupId), request.resource.data.reviewedBy);
       allow delete: if isValidId(requestId);
     }
 

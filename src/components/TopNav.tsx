@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { User, ViewTab, ActiveCall, InAppNotification } from '../types';
 import { NotificationDropdown } from './NotificationDropdown';
+import { DEFAULT_AVATAR } from '../utils/photoUpload';
 
 interface TopNavProps {
   currentUser: User;
@@ -217,11 +218,11 @@ export const TopNav: React.FC<TopNavProps> = ({
           <span className="lg:hidden">Test</span>
         </button>
 
-        {/* User Profile Button */}
+        {/* User Profile Button with Edit Profile tooltip & indicator */}
         <button
           onClick={onOpenProfile}
-          className="flex items-center gap-2 p-1 md:px-2.5 md:py-1 rounded-lg hover:bg-slate-900 text-slate-200 transition-colors"
-          title="Manage account & profile"
+          className="flex items-center gap-2 p-1 md:px-2.5 md:py-1 rounded-lg hover:bg-slate-900 border border-transparent hover:border-slate-800 text-slate-200 transition-all cursor-pointer group"
+          title="Edit profile & upload photo"
         >
           <div className="relative shrink-0">
             {currentUser.avatar ? (
@@ -229,7 +230,10 @@ export const TopNav: React.FC<TopNavProps> = ({
                 src={currentUser.avatar}
                 alt={currentUser.name}
                 referrerPolicy="no-referrer"
-                className="w-7 h-7 rounded-full object-cover border border-slate-700"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = DEFAULT_AVATAR;
+                }}
+                className="w-7 h-7 rounded-full object-cover border border-slate-700 group-hover:border-blue-500 transition-colors"
               />
             ) : (
               <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-semibold">
@@ -248,12 +252,12 @@ export const TopNav: React.FC<TopNavProps> = ({
               }`}
             />
           </div>
-          <div className="hidden lg:flex flex-col text-left truncate max-w-[110px]">
-            <span className="text-xs font-medium text-slate-200 truncate">
+          <div className="hidden lg:flex flex-col text-left truncate max-w-[120px]">
+            <span className="text-xs font-medium text-slate-200 truncate group-hover:text-white flex items-center gap-1">
               {currentUser.name}
             </span>
-            <span className="text-[10px] text-slate-400 truncate">
-              {currentUser.username ? `@${currentUser.username}` : (currentUser.location?.city || 'Elie Chat')}
+            <span className="text-[10px] text-blue-400 group-hover:text-blue-300 truncate">
+              Edit Profile
             </span>
           </div>
         </button>

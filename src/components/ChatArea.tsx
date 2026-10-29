@@ -20,10 +20,14 @@ import {
   ArrowLeft,
   Check,
   CheckCheck,
-  Settings
+  Settings,
+  Lock,
+  UserPlus,
+  Clock
 } from 'lucide-react';
 import { Message, User, Room } from '../types';
 import { formatLastSeen } from '../utils/userSync';
+import { DEFAULT_AVATAR } from '../utils/photoUpload';
 
 interface ChatAreaProps {
   currentUser: User;
@@ -46,7 +50,9 @@ interface ChatAreaProps {
   onDeleteRoom?: (roomId: string) => void;
   onDeleteMessage?: (messageId: string) => void;
   onBackToSidebar?: () => void;
-  onOpenGroupManagement?: (room: Room) => void;
+  onOpenGroupManagement?: (room: Room, initialTab?: 'details' | 'invite' | 'requests' | 'invitations') => void;
+  onRequestJoinGroup?: (room: Room) => void;
+  hasPendingJoinRequest?: boolean;
 }
 
 const COMMON_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🚀', '👀'];
@@ -66,6 +72,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onDeleteMessage,
   onBackToSidebar,
   onOpenGroupManagement,
+  onRequestJoinGroup,
+  hasPendingJoinRequest = false,
 }) => {
   const [inputText, setInputText] = useState('');
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -229,6 +237,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const isRoom = Boolean(currentRoom);
+  const isRoomMember = !isRoom || !currentRoom?.isPrivate || (
+    currentRoom.createdById === currentUser.id ||
+    (Array.isArray(currentRoom.memberIds) && currentRoom.memberIds.includes(currentUser.id)) ||
+    (Array.isArray(currentRoom.adminIds) && currentRoom.adminIds.includes(currentUser.id))
+  );
   const targetTitle = isRoom ? currentRoom?.name : directUser?.name;
 
   return (
@@ -287,6 +300,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   alt={directUser.name}
                   referrerPolicy="no-referrer"
                   className="w-8 h-8 rounded-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = DEFAULT_AVATAR;
+                  }}
                 />
               ) : (
                 <div className="w-8 h-8 rounded-full bg-slate-700 text-slate-200 flex items-center justify-center font-bold text-xs">
@@ -314,6 +331,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <h2 className="text-sm font-semibold text-white tracking-tight truncate">
                 {targetTitle || 'Elie Chat'}
               </h2>
+              {isRoom && currentRoom?.isPrivate && (
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700 flex items-center gap-0.5 shrink-0">
+                  <Lock className="w-2.5 h-2.5" /> Private
+                </span>
+              )}
               {isRoom && currentRoom?.isCustomGroup && (
                 <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-semibold border border-purple-500/30 shrink-0">
                   Group
@@ -366,16 +388,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* Action Buttons: Voice / Video Call & Delete Room */}
+        {/* Action Buttons: Voice / Video Call & Invite / Details */}
         <div className="flex items-center gap-1.5 md:gap-2 shrink-0">
-          {isRoom && currentRoom && currentRoom.isCustomGroup && onOpenGroupManagement && (
+          {/* Invite Member action: visible and accessible to EVERY active member */}
+          {isRoom && currentRoom && isRoomMember && onOpenGroupManagement && (
             <button
-              onClick={() => onOpenGroupManagement(currentRoom)}
+              onClick={() => onOpenGroupManagement(currentRoom, 'invite')}
+              title="Invite registered users to this group"
+              className="p-1.5 px-2.5 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/30 transition-all flex items-center gap-1.5 text-xs font-semibold shadow-sm"
+            >
+              <UserPlus className="w-3.5 h-3.5 text-blue-400" />
+              <span className="hidden sm:inline">Invite</span>
+            </button>
+          )}
+
+          {isRoom && currentRoom && onOpenGroupManagement && (
+            <button
+              onClick={() => onOpenGroupManagement(currentRoom, 'details')}
               title="Group settings & members"
               className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-colors flex items-center gap-1 text-xs"
             >
               <Settings className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Settings</span>
+              <span className="hidden sm:inline">Details</span>
             </button>
           )}
 
@@ -393,41 +427,77 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
           )}
 
-          {isRoom && currentRoom?.activeCall ? (
-            <button
-              onClick={onJoinRoomCall}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors whitespace-nowrap animate-pulse"
-            >
-              <Radio className="w-3.5 h-3.5" />
-              <span>Join Live Stage</span>
-            </button>
-          ) : (
-            <>
+          {/* Voice and Video Call actions are restricted to authorized active members */}
+          {isRoomMember && (
+            currentRoom?.activeCall ? (
               <button
-                onClick={() => onStartCall('audio')}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
-                title="Start Voice Call"
+                onClick={onJoinRoomCall}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors whitespace-nowrap animate-pulse"
               >
-                <Phone className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="hidden sm:inline">Voice Call</span>
+                <Radio className="w-3.5 h-3.5" />
+                <span>Join Live Stage</span>
               </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => onStartCall('audio')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                  title="Start Voice Call"
+                >
+                  <Phone className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="hidden sm:inline">Voice Call</span>
+                </button>
 
-              <button
-                onClick={() => onStartCall('video')}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
-                title="Start Video Call"
-              >
-                <Video className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Video Call</span>
-              </button>
-            </>
+                <button
+                  onClick={() => onStartCall('video')}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+                  title="Start Video Call"
+                >
+                  <Video className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Video Call</span>
+                </button>
+              </>
+            )
           )}
         </div>
       </div>
 
-      {/* Message Feed */}
+      {/* Message Feed / Private Lock Screen */}
       <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3.5">
-        {messages.length === 0 ? (
+        {isRoom && !isRoomMember ? (
+          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4 my-auto">
+            <div className="w-16 h-16 rounded-2xl bg-purple-950/40 border border-purple-500/30 flex items-center justify-center text-purple-400 shadow-xl">
+              <Lock className="w-8 h-8" />
+            </div>
+            <div className="max-w-md space-y-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-purple-950/60 border border-purple-500/40 text-[11px] text-purple-300 font-semibold mb-1">
+                <Lock className="w-3 h-3" /> Private Group
+              </div>
+              <h3 className="text-base sm:text-lg font-bold text-white">{currentRoom?.name}</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                {currentRoom?.description || 'This is a private group.'}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Messages, voice recordings, attachments, and call stages are restricted exclusively to approved active members.
+              </p>
+            </div>
+
+            {hasPendingJoinRequest ? (
+              <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-300 text-xs font-medium">
+                <Clock className="w-4 h-4 animate-pulse text-amber-400 shrink-0" />
+                <span>Your join request is pending review by an authorized administrator.</span>
+              </div>
+            ) : onRequestJoinGroup && currentRoom ? (
+              <button
+                onClick={() => onRequestJoinGroup(currentRoom)}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-600/20 flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Request to Join Group</span>
+              </button>
+            ) : null}
+          </div>
+        ) : messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 text-xs py-10 space-y-2">
             <div className="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400 mb-2">
               <Users className="w-6 h-6" />
@@ -458,6 +528,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       alt={msg.senderName}
                       referrerPolicy="no-referrer"
                       className="w-7 h-7 rounded-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = DEFAULT_AVATAR;
+                      }}
                     />
                   ) : (
                     <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-300 flex items-center justify-center text-xs font-bold border border-slate-700">
@@ -677,137 +751,142 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {/* Attached Image Preview */}
-      {attachedImage && (
-        <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center gap-3">
-          <div className="relative">
-            <img
-              src={attachedImage}
-              alt="Attached preview"
-              className="w-16 h-16 object-cover rounded-md border border-slate-700"
-            />
-            <button
-              onClick={() => setAttachedImage(null)}
-              className="absolute -top-1.5 -right-1.5 bg-red-600 text-white rounded-full p-0.5 hover:bg-red-500 shadow"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-          <span className="text-xs text-slate-400">Image attached. Press Send or hit Enter.</span>
-        </div>
-      )}
-
-      {/* Voice Recording Bar */}
-      {isRecordingVoice ? (
-        <div className="p-3 bg-red-950/40 border-t border-red-900/50 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-red-400 text-xs font-semibold">
-            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
-            <span>Recording Voice Message: 0:{recordingDuration.toString().padStart(2, '0')}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => stopVoiceRecording(false)}
-              className="px-3 py-1 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => stopVoiceRecording(true)}
-              className="px-3 py-1 rounded-lg bg-red-600 text-white hover:bg-red-500 text-xs font-semibold flex items-center gap-1 shadow-sm"
-            >
-              <Square className="w-3 h-3 fill-current" />
-              <span>Send Voice</span>
-            </button>
-          </div>
-        </div>
-      ) : (
-        /* Input Composer Bar */
-        <div className="p-2.5 md:p-3 border-t border-slate-800 bg-slate-900/80">
-          <div className="flex items-end gap-1.5 md:gap-2 bg-slate-950 border border-slate-800 rounded-xl p-1.5 md:p-2 focus-within:border-blue-500 transition-colors">
-            {/* Hidden File Input */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept="image/*"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-
-            {/* Attach Image Button */}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              title="Attach image"
-              className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
-            >
-              <ImageIcon className="w-4 h-4" />
-            </button>
-
-            {/* Voice Record Button */}
-            <button
-              onClick={startVoiceRecording}
-              title="Record voice message"
-              className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
-            >
-              <Mic className="w-4 h-4" />
-            </button>
-
-            {/* Textarea */}
-            <textarea
-              value={inputText}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                isRoom
-                  ? `Message #${currentRoom?.name}...`
-                  : `Message ${directUser?.name || 'peer'}...`
-              }
-              rows={1}
-              className="flex-1 bg-transparent text-xs text-slate-200 placeholder-slate-500 resize-none focus:outline-none max-h-28 py-1 leading-relaxed"
-            />
-
-            {/* Emoji Quick Button */}
-            <div className="relative">
-              <button
-                onClick={() => setShowEmojiPicker(showEmojiPicker === 'input' ? null : 'input')}
-                title="Add emoji"
-                className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
-              >
-                <Smile className="w-4 h-4" />
-              </button>
-
-              {showEmojiPicker === 'input' && (
-                <div className="absolute right-0 bottom-full mb-2 bg-slate-900 border border-slate-700 rounded-xl p-2 shadow-2xl flex items-center gap-1 z-30">
-                  {COMMON_EMOJIS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      onClick={() => {
-                        setInputText((prev) => prev + emoji);
-                        setShowEmojiPicker(null);
-                      }}
-                      className="p-1 text-base hover:scale-125 transition-transform"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              )}
+      {/* Only authorized active members can type, attach, or record messages */}
+      {isRoomMember && (
+        <>
+          {/* Attached Image Preview */}
+          {attachedImage && (
+            <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center gap-3">
+              <div className="relative">
+                <img
+                  src={attachedImage}
+                  alt="Attached preview"
+                  className="w-16 h-16 object-cover rounded-md border border-slate-700"
+                />
+                <button
+                  onClick={() => setAttachedImage(null)}
+                  className="absolute -top-1.5 -right-1.5 bg-red-600 text-white rounded-full p-0.5 hover:bg-red-500 shadow"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              <span className="text-xs text-slate-400">Image attached. Press Send or hit Enter.</span>
             </div>
+          )}
 
-            {/* Send Button */}
-            <button
-              onClick={handleSend}
-              disabled={!inputText.trim() && !attachedImage}
-              title="Send message (Enter)"
-              className={`p-1.5 md:p-2 rounded-lg transition-colors shrink-0 ${
-                inputText.trim() || attachedImage
-                  ? 'bg-blue-600 text-white hover:bg-blue-500'
-                  : 'bg-slate-800 text-slate-600 cursor-not-allowed'
-              }`}
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+          {/* Voice Recording Bar */}
+          {isRecordingVoice ? (
+            <div className="p-3 bg-red-950/40 border-t border-red-900/50 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-red-400 text-xs font-semibold">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                <span>Recording Voice Message: 0:{recordingDuration.toString().padStart(2, '0')}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => stopVoiceRecording(false)}
+                  className="px-3 py-1 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => stopVoiceRecording(true)}
+                  className="px-3 py-1 rounded-lg bg-red-600 text-white hover:bg-red-500 text-xs font-semibold flex items-center gap-1 shadow-sm"
+                >
+                  <Square className="w-3 h-3 fill-current" />
+                  <span>Send Voice</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Input Composer Bar */
+            <div className="p-2.5 md:p-3 border-t border-slate-800 bg-slate-900/80">
+              <div className="flex items-end gap-1.5 md:gap-2 bg-slate-950 border border-slate-800 rounded-xl p-1.5 md:p-2 focus-within:border-blue-500 transition-colors">
+                {/* Hidden File Input */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  accept="image/*"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+
+                {/* Attach Image Button */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Attach image"
+                  className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
+                >
+                  <ImageIcon className="w-4 h-4" />
+                </button>
+
+                {/* Voice Record Button */}
+                <button
+                  onClick={startVoiceRecording}
+                  title="Record voice message"
+                  className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+
+                {/* Textarea */}
+                <textarea
+                  value={inputText}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder={
+                    isRoom
+                      ? `Message #${currentRoom?.name}...`
+                      : `Message ${directUser?.name || 'peer'}...`
+                  }
+                  rows={1}
+                  className="flex-1 bg-transparent text-xs text-slate-200 placeholder-slate-500 resize-none focus:outline-none max-h-28 py-1 leading-relaxed"
+                />
+
+                {/* Emoji Quick Button */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowEmojiPicker(showEmojiPicker === 'input' ? null : 'input')}
+                    title="Add emoji"
+                    className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
+                  >
+                    <Smile className="w-4 h-4" />
+                  </button>
+
+                  {showEmojiPicker === 'input' && (
+                    <div className="absolute right-0 bottom-full mb-2 bg-slate-900 border border-slate-700 rounded-xl p-2 shadow-2xl flex items-center gap-1 z-30">
+                      {COMMON_EMOJIS.map((emoji) => (
+                        <button
+                          key={emoji}
+                          onClick={() => {
+                            setInputText((prev) => prev + emoji);
+                            setShowEmojiPicker(null);
+                          }}
+                          className="p-1 text-base hover:scale-125 transition-transform"
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Send Button */}
+                <button
+                  onClick={handleSend}
+                  disabled={!inputText.trim() && !attachedImage}
+                  title="Send message (Enter)"
+                  className={`p-1.5 md:p-2 rounded-lg transition-colors shrink-0 ${
+                    inputText.trim() || attachedImage
+                      ? 'bg-blue-600 text-white hover:bg-blue-500'
+                      : 'bg-slate-800 text-slate-600 cursor-not-allowed'
+                  }`}
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

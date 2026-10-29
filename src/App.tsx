@@ -18,6 +18,7 @@ import {
   ViewTab, 
   CallSession, 
   GroupInvitation, 
+  JoinRequest,
   InAppNotification 
 } from './types';
 import { PeerMeshManager } from './utils/peerMesh';
@@ -45,7 +46,9 @@ import {
 import { 
   subscribeUserInvitations, 
   respondToInvitation, 
-  createJoinRequest 
+  createJoinRequest,
+  subscribeUserJoinRequests,
+  isGroupMember
 } from './utils/groupWorkflow';
 import { subscribeUserNotifications } from './utils/notificationSync';
 import { subscribeAuthState } from './utils/auth';
@@ -258,10 +261,11 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
   const [isMultiTabOpen, setIsMultiTabOpen] = useState(false);
-  const [managingGroup, setManagingGroup] = useState<Room | null>(null);
+  const [managingGroup, setManagingGroup] = useState<{ room: Room; initialTab?: 'details' | 'invite' | 'requests' | 'invitations' } | null>(null);
 
   // Group Workflow & Notifications
   const [pendingInvitations, setPendingInvitations] = useState<GroupInvitation[]>([]);
+  const [userSubmittedRequests, setUserSubmittedRequests] = useState<JoinRequest[]>([]);
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
 
   // Incoming Call State
@@ -399,10 +403,14 @@ export default function App() {
     };
   }, []);
 
-  // Real-Time Firestore Subscriptions: Group Invitations & In-App Notifications
+  // Real-Time Firestore Subscriptions: Group Invitations, Join Requests & In-App Notifications
   useEffect(() => {
     const unsubInvitations = subscribeUserInvitations(currentUser.id, (invs) => {
       setPendingInvitations(invs);
+    });
+
+    const unsubUserRequests = subscribeUserJoinRequests(currentUser.id, (reqs) => {
+      setUserSubmittedRequests(reqs);
     });
 
     const unsubNotifs = subscribeUserNotifications(currentUser.id, (notifs) => {
@@ -411,6 +419,7 @@ export default function App() {
 
     return () => {
       unsubInvitations();
+      unsubUserRequests();
       unsubNotifs();
     };
   }, [currentUser.id]);
@@ -424,7 +433,7 @@ export default function App() {
     // Check if group is private and user is unauthorized
     if (isGroup) {
       const room = rooms.find((r) => r.id === targetId);
-      if (room?.isPrivate && (!room.memberIds || !room.memberIds.includes(currentUser.id))) {
+      if (room?.isPrivate && !isGroupMember(room, currentUser.id)) {
         setMessages([]);
         return;
       }
@@ -917,6 +926,13 @@ export default function App() {
 
   // Select Notification
   const handleSelectNotification = (notif: InAppNotification) => {
+    if (notif.type === 'join_request' && notif.targetId) {
+      const room = rooms.find((r) => r.id === notif.targetId);
+      if (room) {
+        setManagingGroup({ room, initialTab: 'requests' });
+        return;
+      }
+    }
     if (notif.isGroup && notif.targetId) {
       setActiveRoomId(notif.targetId);
       setActiveDirectUserId(null);
@@ -939,6 +955,16 @@ export default function App() {
   }) => {
     const isGroup = activeDirectUserId === null;
     const targetId = isGroup ? activeRoomId! : activeDirectUserId!;
+
+    // Enforce private group message protection: non-members cannot send
+    if (isGroup) {
+      const room = rooms.find((r) => r.id === targetId);
+      if (room?.isPrivate && !isGroupMember(room, currentUser.id)) {
+        alert('Access denied: You must be an approved active member to send messages to this private group.');
+        return;
+      }
+    }
+
     const conversationId = getConversationId(currentUser.id, targetId, isGroup);
 
     const newMsg: Message = {
@@ -1097,7 +1123,7 @@ export default function App() {
           onCloseMobile={() => setMobileScreen('chat')}
           pendingInvitations={pendingInvitations}
           onRespondInvitation={handleRespondInvitation}
-          onOpenGroupManagement={(g) => setManagingGroup(g)}
+          onOpenGroupManagement={(g, tab) => setManagingGroup({ room: g, initialTab: tab })}
           onRequestJoinGroup={handleRequestJoinGroup}
         />
 
@@ -1148,7 +1174,15 @@ export default function App() {
                 setMessages((prev) => prev.filter((m) => m.id !== msgId));
               }}
               onBackToSidebar={() => setMobileScreen('sidebar')}
-              onOpenGroupManagement={(room) => setManagingGroup(room)}
+              onOpenGroupManagement={(room, tab) => setManagingGroup({ room, initialTab: tab })}
+              onRequestJoinGroup={handleRequestJoinGroup}
+              hasPendingJoinRequest={
+                currentRoom
+                  ? userSubmittedRequests.some(
+                      (r) => r.groupId === currentRoom.id && r.status === 'pending'
+                    )
+                  : false
+              }
             />
           </div>
         )}
@@ -1228,10 +1262,11 @@ export default function App() {
       {/* Group Management Modal */}
       {managingGroup && (
         <GroupManagementModal
-          group={managingGroup}
+          group={managingGroup.room}
           currentUser={currentUser}
           allUsers={users}
           onClose={() => setManagingGroup(null)}
+          initialTab={managingGroup.initialTab}
           onGroupUpdated={() => {
             // Updated group re-syncs through onSnapshot
           }}

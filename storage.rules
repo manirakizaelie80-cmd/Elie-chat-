@@ -1,0 +1,17 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /profile_photos/{userId}/{allPaths=**} {
+      // Profile images are publicly readable throughout Elie Chat
+      allow read: if true;
+
+      // Users can upload and replace only image files under 10MB into their own directory
+      allow write: if request.resource.size < 10 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*')
+                   && (request.auth == null || request.auth.uid == userId);
+
+      // Allow deletion of user profile photo
+      allow delete: if request.auth == null || request.auth.uid == userId;
+    }
+  }
+}

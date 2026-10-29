@@ -22,6 +22,7 @@ import {
 import { ActiveCall, CallParticipant, User, Message } from '../types';
 import { WebRTCManager } from '../utils/webrtcManager';
 import { PeerMeshManager } from '../utils/peerMesh';
+import { DEFAULT_AVATAR } from '../utils/photoUpload';
 
 interface ActiveCallModalProps {
   call: ActiveCall;
@@ -373,6 +374,10 @@ export const ActiveCallModal: React.FC<ActiveCallModalProps> = ({
                             alt={peer.name}
                             referrerPolicy="no-referrer"
                             className="w-20 h-20 rounded-full object-cover border-2 border-slate-700 shadow"
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src = DEFAULT_AVATAR;
+                            }}
                           />
                         ) : (
                           <div className="w-20 h-20 rounded-full bg-slate-700 text-white flex items-center justify-center text-2xl font-bold">

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, 
   Check, 
@@ -9,14 +9,24 @@ import {
   UserCheck, 
   Sparkles, 
   AtSign, 
-  Eye, 
-  EyeOff, 
   CheckCheck,
   UserPlus,
-  Loader2
+  Loader2,
+  Camera,
+  Upload,
+  Trash2,
+  AlertCircle,
+  Image as ImageIcon
 } from 'lucide-react';
 import { User, UserLocation } from '../types';
 import { loginWithGoogle, logoutUser, checkUsernameAvailable, validateUsername } from '../utils/auth';
+import { 
+  validateImageFile, 
+  compressAndCropImage, 
+  uploadUserProfilePhoto, 
+  removeUserProfilePhoto, 
+  DEFAULT_AVATAR 
+} from '../utils/photoUpload';
 
 interface UserProfileModalProps {
   currentUser: User;
@@ -61,7 +71,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 }) => {
   const [name, setName] = useState(currentUser.name);
   const [username, setUsername] = useState(currentUser.username || '');
-  const [avatar, setAvatar] = useState(currentUser.avatar);
+  const [avatar, setAvatar] = useState(currentUser.avatar || DEFAULT_AVATAR);
   const [status, setStatus] = useState<'online' | 'away' | 'busy' | 'offline'>(
     currentUser.status === 'in-call' ? 'online' : (currentUser.status === 'offline' ? 'online' : currentUser.status)
   );
@@ -75,6 +85,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [copiedId, setCopiedId] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Photo Upload & Preview State
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+  const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [photoMessage, setPhotoMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Username availability check
   const [usernameChecking, setUsernameChecking] = useState(false);
@@ -109,6 +127,122 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
     return () => clearTimeout(timer);
   }, [username, currentUser.username]);
+
+  // Handle image file selection (Gallery / File picker / Camera)
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setPhotoMessage(null);
+
+    // 1. Validate image format and size
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      setPhotoMessage({ text: validation.error || 'Invalid image file.', type: 'error' });
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    // 2. Client-side crop & compress (square avatar, max 400x400)
+    try {
+      const { blob, dataUrl } = await compressAndCropImage(file, 400, 0.85);
+      setPreviewBlob(blob);
+      setPreviewDataUrl(dataUrl);
+      setPhotoMessage(null);
+    } catch (err: any) {
+      setPhotoMessage({ text: err.message || 'Failed to process image.', type: 'error' });
+    }
+  };
+
+  // Upload and commit the previewed photo to Firebase Storage & Firestore
+  const handleConfirmPhotoUpload = async () => {
+    if (!previewBlob || !previewDataUrl) return;
+
+    setIsUploadingPhoto(true);
+    setUploadProgress(10);
+    setPhotoMessage(null);
+
+    try {
+      const newAvatarUrl = await uploadUserProfilePhoto({
+        userId: currentUser.id,
+        blob: previewBlob,
+        dataUrlFallback: previewDataUrl,
+        onProgress: (pct) => setUploadProgress(pct),
+      });
+
+      setAvatar(newAvatarUrl);
+      setPreviewBlob(null);
+      setPreviewDataUrl(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+
+      setPhotoMessage({
+        text: 'Profile photo uploaded and saved successfully!',
+        type: 'success',
+      });
+
+      // Synchronize immediately to active session
+      onSave({
+        name: name.trim(),
+        username: username.trim() || undefined,
+        avatar: newAvatarUrl,
+        status,
+        customStatus: customStatus.trim(),
+        readReceiptsEnabled,
+        location: selectedLocation,
+      });
+    } catch (err: any) {
+      console.error('Photo upload error:', err);
+      setPhotoMessage({
+        text: err.message || 'Failed to upload photo. Please try again.',
+        type: 'error',
+      });
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  // Cancel preview
+  const handleCancelPreview = () => {
+    setPreviewBlob(null);
+    setPreviewDataUrl(null);
+    setPhotoMessage(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Remove photo (revert to clean default avatar)
+  const handleRemovePhoto = async () => {
+    setIsUploadingPhoto(true);
+    setPhotoMessage(null);
+    try {
+      const defaultUrl = await removeUserProfilePhoto(currentUser.id);
+      setAvatar(defaultUrl);
+      setPreviewBlob(null);
+      setPreviewDataUrl(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+
+      setPhotoMessage({
+        text: 'Profile photo removed. Reverted to default avatar.',
+        type: 'success',
+      });
+
+      onSave({
+        name: name.trim(),
+        username: username.trim() || undefined,
+        avatar: defaultUrl,
+        status,
+        customStatus: customStatus.trim(),
+        readReceiptsEnabled,
+        location: selectedLocation,
+      });
+    } catch (err: any) {
+      setPhotoMessage({
+        text: err.message || 'Failed to remove photo.',
+        type: 'error',
+      });
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,30 +316,190 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
       <div 
-        className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-4 sm:p-6 shadow-2xl relative my-auto space-y-4 animate-in fade-in zoom-in-95 duration-150"
+        className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl relative my-auto space-y-4 animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <button
           onClick={onClose}
           className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors"
+          title="Close"
         >
           <X className="w-4 h-4" />
         </button>
 
-        <div>
+        <div className="shrink-0">
           <h3 className="text-base font-bold text-white flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-blue-400" />
-            User Account & Profile
+            Edit Profile & Photo
           </h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Manage your authenticated identity, username, presence, and privacy settings.
+            Upload your custom profile photo, customize your identity, username, and real-time presence.
           </p>
         </div>
 
+        {/* Notifications / Feedback Banner */}
+        {photoMessage && (
+          <div className={`p-3 rounded-xl text-xs flex items-center gap-2 shrink-0 ${
+            photoMessage.type === 'success' 
+              ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300' 
+              : 'bg-red-500/10 border border-red-500/30 text-red-300'
+          }`}>
+            {photoMessage.type === 'success' ? (
+              <Check className="w-4 h-4 shrink-0 text-emerald-400" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+            )}
+            <span>{photoMessage.text}</span>
+          </div>
+        )}
+
+        {/* SECTION 1: PROFILE PHOTO UPLOAD & MANAGEMENT */}
+        <div className="p-3.5 sm:p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3 shrink-0">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+              <Camera className="w-3.5 h-3.5 text-blue-400" />
+              <span>Profile Photo</span>
+            </label>
+            <span className="text-[10px] text-slate-400">JPG, PNG, WebP · Max 10MB</span>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center gap-4">
+            {/* Avatar Preview Box */}
+            <div className="relative shrink-0">
+              <img
+                src={previewDataUrl || avatar}
+                alt="Profile Avatar"
+                referrerPolicy="no-referrer"
+                className={`w-20 h-20 rounded-2xl object-cover border-2 shadow-md transition-all ${
+                  previewDataUrl 
+                    ? 'border-blue-500 ring-4 ring-blue-500/20' 
+                    : 'border-slate-700'
+                }`}
+              />
+              <span
+                className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-slate-950 ${
+                  status === 'online' ? 'bg-emerald-500' : status === 'away' ? 'bg-amber-500' : 'bg-red-500'
+                }`}
+              />
+            </div>
+
+            {/* Upload Buttons & Options */}
+            <div className="flex-1 space-y-2 text-center sm:text-left w-full">
+              {/* Hidden file input supporting gallery, files, and camera capture */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/jpeg,image/png,image/webp,image/jpg"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+
+              {previewDataUrl ? (
+                /* Actions when a new photo is previewed */
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-blue-300">New photo selected (optimized preview)</p>
+                  <div className="flex items-center gap-2 justify-center sm:justify-start">
+                    <button
+                      type="button"
+                      onClick={handleConfirmPhotoUpload}
+                      disabled={isUploadingPhoto}
+                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-blue-500/25 transition-all disabled:opacity-50"
+                    >
+                      {isUploadingPhoto ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Uploading ({uploadProgress}%)...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Upload & Save Photo</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelPreview}
+                      disabled={isUploadingPhoto}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Standard upload and remove actions */
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 justify-center sm:justify-start flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploadingPhoto}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload New Photo</span>
+                    </button>
+
+                    {avatar !== DEFAULT_AVATAR && (
+                      <button
+                        type="button"
+                        onClick={handleRemovePhoto}
+                        disabled={isUploadingPhoto}
+                        className="px-2.5 py-1.5 border border-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
+                        title="Remove custom photo and reset to default"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Upload from your phone gallery, computer, or camera. Large photos are automatically resized and compressed.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Preset Avatars Alternative */}
+          <div className="pt-2 border-t border-slate-800/80">
+            <label className="block text-[11px] font-medium text-slate-400 mb-1.5">Or choose a team persona:</label>
+            <div className="flex items-center gap-2.5 overflow-x-auto pb-1">
+              {PRESET_AVATARS.map((p) => (
+                <div
+                  key={p.id}
+                  onClick={() => {
+                    setAvatar(p.url);
+                    setPreviewDataUrl(null);
+                    setPreviewBlob(null);
+                  }}
+                  className={`relative cursor-pointer rounded-full p-0.5 border-2 transition-transform hover:scale-105 shrink-0 ${
+                    avatar === p.url && !previewDataUrl ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'
+                  }`}
+                  title={p.label}
+                >
+                  <img
+                    src={p.url}
+                    alt={p.label}
+                    referrerPolicy="no-referrer"
+                    className="w-8 h-8 rounded-full object-cover"
+                  />
+                  {avatar === p.url && !previewDataUrl && (
+                    <div className="absolute inset-0 bg-blue-500/20 rounded-full flex items-center justify-center text-white">
+                      <Check className="w-3.5 h-3.5" />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {/* Authentication Card */}
-        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5">
+        <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 shrink-0">
           <div className="flex items-center justify-between text-xs">
             <span className="text-slate-400">Account Status:</span>
             {currentUser.email ? (
@@ -218,7 +512,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             )}
           </div>
 
-          <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
+          <div className="flex items-center justify-between gap-2 pt-0.5 flex-wrap">
             <div className="flex items-center gap-1.5 text-xs text-slate-400 truncate">
               <span className="font-mono text-[11px] bg-slate-900 px-2 py-0.5 rounded border border-slate-800 truncate">
                 UID: {currentUser.id.substring(0, 14)}...
@@ -277,36 +571,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         </div>
 
         {/* Profile Edit Form */}
-        <form onSubmit={handleSubmit} className="space-y-3.5 max-h-[60vh] overflow-y-auto pr-1">
-          {/* Avatar Selection */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-2">Profile Picture</label>
-            <div className="flex items-center gap-3">
-              {PRESET_AVATARS.map((p) => (
-                <div
-                  key={p.id}
-                  onClick={() => setAvatar(p.url)}
-                  className={`relative cursor-pointer rounded-full p-0.5 border-2 transition-transform hover:scale-105 ${
-                    avatar === p.url ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'
-                  }`}
-                  title={p.label}
-                >
-                  <img
-                    src={p.url}
-                    alt={p.label}
-                    referrerPolicy="no-referrer"
-                    className="w-11 h-11 rounded-full object-cover"
-                  />
-                  {avatar === p.url && (
-                    <div className="absolute inset-0 bg-blue-500/20 rounded-full flex items-center justify-center text-white">
-                      <Check className="w-4 h-4" />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
+        <form onSubmit={handleSubmit} className="space-y-3.5 overflow-y-auto pr-1 flex-1">
           {/* Full Name */}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">Display Name</label>
@@ -478,7 +743,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           )}
 
           {/* Submit */}
-          <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-800 shrink-0">
             <button
               type="button"
               onClick={onClose}
@@ -490,7 +755,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               type="submit"
               className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded-lg transition-colors shadow-md shadow-blue-500/20"
             >
-              Save Profile
+              Save Changes
             </button>
           </div>
         </form>

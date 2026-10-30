@@ -22,11 +22,10 @@ import { User, UserLocation } from '../types';
 import { loginWithGoogle, logoutUser, checkUsernameAvailable, validateUsername } from '../utils/auth';
 import { 
   validateImageFile, 
-  compressAndCropImage, 
-  uploadUserProfilePhoto, 
   removeUserProfilePhoto, 
   DEFAULT_AVATAR 
 } from '../utils/photoUpload';
+import { ProfilePhotoCropperModal } from './ProfilePhotoCropperModal';
 
 interface UserProfileModalProps {
   currentUser: User;
@@ -87,11 +86,11 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Photo Upload & Preview State
+  // Photo Upload & Interactive Cropper State
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
-  const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
-  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  const [cropperFile, setCropperFile] = useState<File | null>(null);
+  const [isCropperOpen, setIsCropperOpen] = useState(false);
+  const [isRemovingPhoto, setIsRemovingPhoto] = useState(false);
   const [photoMessage, setPhotoMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Username availability check
@@ -129,13 +128,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   }, [username, currentUser.username]);
 
   // Handle image file selection (Gallery / File picker / Camera)
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setPhotoMessage(null);
 
-    // 1. Validate image format and size
+    // Validate image format and 5MB size limit
     const validation = validateImageFile(file);
     if (!validation.valid) {
       setPhotoMessage({ text: validation.error || 'Invalid image file.', type: 'error' });
@@ -143,81 +142,39 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       return;
     }
 
-    // 2. Client-side crop & compress (square avatar, max 400x400)
-    try {
-      const { blob, dataUrl } = await compressAndCropImage(file, 400, 0.85);
-      setPreviewBlob(blob);
-      setPreviewDataUrl(dataUrl);
-      setPhotoMessage(null);
-    } catch (err: any) {
-      setPhotoMessage({ text: err.message || 'Failed to process image.', type: 'error' });
-    }
-  };
-
-  // Upload and commit the previewed photo to Firebase Storage & Firestore
-  const handleConfirmPhotoUpload = async () => {
-    if (!previewBlob || !previewDataUrl) return;
-
-    setIsUploadingPhoto(true);
-    setUploadProgress(10);
-    setPhotoMessage(null);
-
-    try {
-      const newAvatarUrl = await uploadUserProfilePhoto({
-        userId: currentUser.id,
-        blob: previewBlob,
-        dataUrlFallback: previewDataUrl,
-        onProgress: (pct) => setUploadProgress(pct),
-      });
-
-      setAvatar(newAvatarUrl);
-      setPreviewBlob(null);
-      setPreviewDataUrl(null);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-
-      setPhotoMessage({
-        text: 'Profile photo uploaded and saved successfully!',
-        type: 'success',
-      });
-
-      // Synchronize immediately to active session
-      onSave({
-        name: name.trim(),
-        username: username.trim() || undefined,
-        avatar: newAvatarUrl,
-        status,
-        customStatus: customStatus.trim(),
-        readReceiptsEnabled,
-        location: selectedLocation,
-      });
-    } catch (err: any) {
-      console.error('Photo upload error:', err);
-      setPhotoMessage({
-        text: err.message || 'Failed to upload photo. Please try again.',
-        type: 'error',
-      });
-    } finally {
-      setIsUploadingPhoto(false);
-    }
-  };
-
-  // Cancel preview
-  const handleCancelPreview = () => {
-    setPreviewBlob(null);
-    setPreviewDataUrl(null);
-    setPhotoMessage(null);
+    // Open interactive crop & reposition modal immediately
+    setCropperFile(file);
+    setIsCropperOpen(true);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Callback when interactive crop upload completes
+  const handleCropperSuccess = (newAvatarUrl: string) => {
+    setAvatar(newAvatarUrl);
+    setPhotoMessage({
+      text: 'Profile photo uploaded and updated successfully in high resolution!',
+      type: 'success',
+    });
+
+    // Synchronize immediately to active session
+    onSave({
+      name: name.trim(),
+      username: username.trim() || undefined,
+      avatar: newAvatarUrl,
+      status,
+      customStatus: customStatus.trim(),
+      readReceiptsEnabled,
+      location: selectedLocation,
+    });
   };
 
   // Remove photo (revert to clean default avatar)
   const handleRemovePhoto = async () => {
-    setIsUploadingPhoto(true);
+    setIsRemovingPhoto(true);
     setPhotoMessage(null);
     try {
       const defaultUrl = await removeUserProfilePhoto(currentUser.id);
       setAvatar(defaultUrl);
-      setPreviewBlob(null);
-      setPreviewDataUrl(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
 
       setPhotoMessage({
@@ -240,7 +197,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
         type: 'error',
       });
     } finally {
-      setIsUploadingPhoto(false);
+      setIsRemovingPhoto(false);
     }
   };
 
@@ -362,21 +319,21 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               <Camera className="w-3.5 h-3.5 text-blue-400" />
               <span>Profile Photo</span>
             </label>
-            <span className="text-[10px] text-slate-400">JPG, PNG, WebP · Max 10MB</span>
+            <span className="text-[10px] text-slate-400">JPG, PNG, WebP · Max 5MB</span>
           </div>
 
           <div className="flex flex-col sm:flex-row items-center gap-4">
             {/* Avatar Preview Box */}
             <div className="relative shrink-0">
               <img
-                src={previewDataUrl || avatar}
+                src={avatar}
                 alt="Profile Avatar"
                 referrerPolicy="no-referrer"
-                className={`w-20 h-20 rounded-2xl object-cover border-2 shadow-md transition-all ${
-                  previewDataUrl 
-                    ? 'border-blue-500 ring-4 ring-blue-500/20' 
-                    : 'border-slate-700'
-                }`}
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = DEFAULT_AVATAR;
+                }}
+                className="w-20 h-20 rounded-2xl object-cover border-2 border-slate-700 shadow-md transition-all"
               />
               <span
                 className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-slate-950 ${
@@ -396,71 +353,37 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 className="hidden"
               />
 
-              {previewDataUrl ? (
-                /* Actions when a new photo is previewed */
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-blue-300">New photo selected (optimized preview)</p>
-                  <div className="flex items-center gap-2 justify-center sm:justify-start">
-                    <button
-                      type="button"
-                      onClick={handleConfirmPhotoUpload}
-                      disabled={isUploadingPhoto}
-                      className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-blue-500/25 transition-all disabled:opacity-50"
-                    >
-                      {isUploadingPhoto ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>Uploading ({uploadProgress}%)...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Upload & Save Photo</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCancelPreview}
-                      disabled={isUploadingPhoto}
-                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* Standard upload and remove actions */
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 justify-center sm:justify-start flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isUploadingPhoto}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      <span>Upload New Photo</span>
-                    </button>
+              <div className="flex items-center gap-2 justify-center sm:justify-start flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isRemovingPhoto}
+                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>{avatar !== DEFAULT_AVATAR ? 'Change / Re-Crop Photo' : 'Upload Profile Photo'}</span>
+                </button>
 
-                    {avatar !== DEFAULT_AVATAR && (
-                      <button
-                        type="button"
-                        onClick={handleRemovePhoto}
-                        disabled={isUploadingPhoto}
-                        className="px-2.5 py-1.5 border border-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
-                        title="Remove custom photo and reset to default"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Remove</span>
-                      </button>
+                {avatar !== DEFAULT_AVATAR && (
+                  <button
+                    type="button"
+                    onClick={handleRemovePhoto}
+                    disabled={isRemovingPhoto}
+                    className="px-2.5 py-1.5 border border-slate-800 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors disabled:opacity-50"
+                    title="Remove custom photo and reset to default"
+                  >
+                    {isRemovingPhoto ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
                     )}
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    Upload from your phone gallery, computer, or camera. Large photos are automatically resized and compressed.
-                  </p>
-                </div>
-              )}
+                    <span>Remove</span>
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400">
+                High-definition WebP & JPEG with aspect-ratio preservation. You can reposition and zoom before saving.
+              </p>
             </div>
           </div>
 
@@ -473,11 +396,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   key={p.id}
                   onClick={() => {
                     setAvatar(p.url);
-                    setPreviewDataUrl(null);
-                    setPreviewBlob(null);
                   }}
                   className={`relative cursor-pointer rounded-full p-0.5 border-2 transition-transform hover:scale-105 shrink-0 ${
-                    avatar === p.url && !previewDataUrl ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'
+                    avatar === p.url ? 'border-blue-500 scale-105' : 'border-transparent opacity-70 hover:opacity-100'
                   }`}
                   title={p.label}
                 >
@@ -487,7 +408,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                     referrerPolicy="no-referrer"
                     className="w-8 h-8 rounded-full object-cover"
                   />
-                  {avatar === p.url && !previewDataUrl && (
+                  {avatar === p.url && (
                     <div className="absolute inset-0 bg-blue-500/20 rounded-full flex items-center justify-center text-white">
                       <Check className="w-3.5 h-3.5" />
                     </div>
@@ -760,6 +681,18 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           </div>
         </form>
       </div>
+
+      {/* Interactive Photo Cropper & Repositioner */}
+      <ProfilePhotoCropperModal
+        isOpen={isCropperOpen}
+        file={cropperFile}
+        userId={currentUser.id}
+        onClose={() => {
+          setIsCropperOpen(false);
+          setCropperFile(null);
+        }}
+        onUploadSuccess={handleCropperSuccess}
+      />
     </div>
   );
 };

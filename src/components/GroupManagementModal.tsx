@@ -20,6 +20,7 @@ import {
   Ban
 } from 'lucide-react';
 import { Room, User, JoinRequest, GroupInvitation } from '../types';
+import { DEFAULT_AVATAR } from '../utils/photoUpload';
 import { 
   sendGroupInvitation, 
   subscribeGroupJoinRequests, 
@@ -355,8 +356,13 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({
                         <div key={m.id} className="flex items-center justify-between p-2 rounded-xl bg-slate-950/40 border border-slate-800/60">
                           <div className="flex items-center gap-2.5 min-w-0">
                             <img
-                              src={m.avatar || '/src/assets/images/avatar_elie_1790670827487.jpg'}
+                              src={m.avatar || DEFAULT_AVATAR}
                               alt={m.name}
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                e.currentTarget.onerror = null;
+                                e.currentTarget.src = DEFAULT_AVATAR;
+                              }}
                               className="w-7 h-7 rounded-full object-cover shrink-0"
                             />
                             <div className="min-w-0">
@@ -453,8 +459,13 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({
                     <div key={target.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/40 border border-slate-800/60 hover:border-slate-700 transition-colors">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <img
-                          src={target.avatar || '/src/assets/images/avatar_elie_1790670827487.jpg'}
+                          src={target.avatar || DEFAULT_AVATAR}
                           alt={target.name}
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = DEFAULT_AVATAR;
+                          }}
                           className="w-8 h-8 rounded-full object-cover shrink-0"
                         />
                         <div className="min-w-0">
@@ -503,8 +514,13 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({
                     <div key={req.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <img
-                          src={req.requesterAvatar || '/src/assets/images/avatar_elie_1790670827487.jpg'}
+                          src={req.requesterAvatar || DEFAULT_AVATAR}
                           alt={req.requesterName}
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = DEFAULT_AVATAR;
+                          }}
                           className="w-8 h-8 rounded-full object-cover shrink-0"
                         />
                         <div className="min-w-0">

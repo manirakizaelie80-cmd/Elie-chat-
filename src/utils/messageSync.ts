@@ -38,6 +38,8 @@ export async function saveMessageRealtime(message: Message): Promise<void> {
     if (message.text !== undefined) data.text = message.text;
     if (message.mediaUrl) data.mediaUrl = message.mediaUrl;
     if (message.mediaType) data.mediaType = message.mediaType;
+    if (message.fileName) data.fileName = message.fileName;
+    if (message.fileSize !== undefined) data.fileSize = message.fileSize;
     if (message.voiceAudio) data.voiceAudio = message.voiceAudio;
     if (message.voiceDuration !== undefined) data.voiceDuration = message.voiceDuration;
     if (message.replyTo) data.replyTo = message.replyTo;

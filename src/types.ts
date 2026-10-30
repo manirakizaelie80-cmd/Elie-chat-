@@ -33,7 +33,9 @@ export interface Message {
   senderAvatar: string;
   text: string;
   mediaUrl?: string;
-  mediaType?: 'image' | 'file';
+  mediaType?: 'image' | 'video' | 'file' | 'audio';
+  fileName?: string;
+  fileSize?: number;
   voiceAudio?: string;
   voiceDuration?: number;
   reactions: Record<string, string[]>;

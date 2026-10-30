@@ -227,7 +227,16 @@
         "mediaType": {
           "type": "string",
           "description": "Type of attached media",
-          "enum": ["image", "file"]
+          "enum": ["image", "video", "file", "audio"]
+        },
+        "fileName": {
+          "type": "string",
+          "description": "Original file name for attachments",
+          "maxLength": 256
+        },
+        "fileSize": {
+          "type": "number",
+          "description": "File size in bytes"
         },
         "voiceAudio": {
           "type": "string",

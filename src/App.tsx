@@ -948,7 +948,9 @@ export default function App() {
   const handleSendMessage = async (payload: {
     text: string;
     mediaUrl?: string;
-    mediaType?: 'image' | 'file';
+    mediaType?: 'image' | 'video' | 'file' | 'audio';
+    fileName?: string;
+    fileSize?: number;
     voiceAudio?: string;
     voiceDuration?: number;
     replyTo?: { id: string; senderName: string; text: string };
@@ -978,6 +980,8 @@ export default function App() {
       text: payload.text,
       mediaUrl: payload.mediaUrl,
       mediaType: payload.mediaType,
+      fileName: payload.fileName,
+      fileSize: payload.fileSize,
       voiceAudio: payload.voiceAudio,
       voiceDuration: payload.voiceDuration,
       replyTo: payload.replyTo,

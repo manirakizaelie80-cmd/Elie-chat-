@@ -13,6 +13,11 @@ import {
   Reply, 
   X, 
   Image as ImageIcon,
+  Film,
+  FileText,
+  Download,
+  Loader2,
+  AlertCircle,
   Users,
   Radio,
   Sparkles,
@@ -28,6 +33,8 @@ import {
 import { Message, User, Room } from '../types';
 import { formatLastSeen } from '../utils/userSync';
 import { DEFAULT_AVATAR } from '../utils/photoUpload';
+import { uploadChatMedia, formatBytes } from '../utils/mediaUpload';
+import { getConversationId } from '../utils/messageSync';
 
 interface ChatAreaProps {
   currentUser: User;
@@ -38,7 +45,9 @@ interface ChatAreaProps {
   onSendMessage: (payload: {
     text: string;
     mediaUrl?: string;
-    mediaType?: 'image' | 'file';
+    mediaType?: 'image' | 'video' | 'file' | 'audio';
+    fileName?: string;
+    fileSize?: number;
     voiceAudio?: string;
     voiceDuration?: number;
     replyTo?: { id: string; senderName: string; text: string };
@@ -78,8 +87,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [inputText, setInputText] = useState('');
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
-  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  
+  // Media Attachment state (Images, Videos, Files, Audio)
+  interface AttachedMediaItem {
+    url: string;
+    type: 'image' | 'video' | 'file' | 'audio';
+    fileName: string;
+    fileSize: number;
+  }
+  const [attachedMedia, setAttachedMedia] = useState<AttachedMediaItem | null>(null);
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+
+  // Hidden File Inputs
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const docInputRef = useRef<HTMLInputElement | null>(null);
   
   // Voice Recording state
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
@@ -93,7 +118,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const typingTimeoutRef = useRef<any>(null);
 
   // Scroll to bottom on new messages
@@ -120,12 +144,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const handleSend = () => {
-    if (!inputText.trim() && !attachedImage) return;
+    if (!inputText.trim() && !attachedMedia) return;
 
     onSendMessage({
       text: inputText.trim(),
-      mediaUrl: attachedImage || undefined,
-      mediaType: attachedImage ? 'image' : undefined,
+      mediaUrl: attachedMedia?.url,
+      mediaType: attachedMedia?.type,
+      fileName: attachedMedia?.fileName,
+      fileSize: attachedMedia?.fileSize,
       replyTo: replyingTo
         ? {
             id: replyingTo.id,
@@ -136,25 +162,43 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     });
 
     setInputText('');
-    setAttachedImage(null);
+    setAttachedMedia(null);
     setReplyingTo(null);
     setShowEmojiPicker(null);
     onSendTyping(false);
   };
 
-  // Image file attachment upload
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Generic File & Media Attachment Upload (Images, Videos, Documents)
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setAttachedImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
+    setIsUploadingMedia(true);
+    setUploadProgress(15);
+    setUploadError(null);
+
+    try {
+      const res = await uploadChatMedia({
+        file,
+        conversationId: convId,
+        userId: currentUser.id,
+        onProgress: (pct) => setUploadProgress(pct),
+      });
+
+      setAttachedMedia({
+        url: res.mediaUrl,
+        type: res.mediaType,
+        fileName: res.fileName,
+        fileSize: res.fileSize,
+      });
+    } catch (err: any) {
+      console.error('Failed to attach media:', err);
+      setUploadError(err.message || 'Failed to upload attachment. Please check file size or network.');
+    } finally {
+      setIsUploadingMedia(false);
+      e.target.value = '';
     }
-    e.target.value = '';
   };
 
   // Voice note recording
@@ -175,18 +219,38 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }
       };
 
-      mediaRecorder.onstop = () => {
+      mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64Audio = reader.result as string;
+        const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
+        const audioFile = new File([audioBlob], `voicenote_${Date.now()}.webm`, { type: 'audio/webm' });
+
+        try {
+          const res = await uploadChatMedia({
+            file: audioFile,
+            conversationId: convId,
+            userId: currentUser.id,
+          });
+
           onSendMessage({
-            text: '🎤 Voice message',
-            voiceAudio: base64Audio,
+            text: '🎤 Voice note',
+            mediaUrl: res.mediaUrl,
+            mediaType: 'audio',
+            voiceAudio: res.mediaUrl,
             voiceDuration: recordingDuration,
           });
-        };
-        reader.readAsDataURL(audioBlob);
+        } catch {
+          // Resilient fallback to DataURL
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64Audio = reader.result as string;
+            onSendMessage({
+              text: '🎤 Voice note',
+              voiceAudio: base64Audio,
+              voiceDuration: recordingDuration,
+            });
+          };
+          reader.readAsDataURL(audioBlob);
+        }
 
         stream.getTracks().forEach((track) => track.stop());
       };
@@ -565,15 +629,61 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         : 'bg-slate-800/95 text-slate-100 rounded-bl-none border border-slate-700/60'
                     }`}
                   >
-                    {/* Attached Image */}
+                    {/* Attached Media: Image, Video, or File */}
                     {msg.mediaUrl && (
-                      <div className="mb-2 overflow-hidden rounded-lg">
-                        <img
-                          src={msg.mediaUrl}
-                          alt="Attachment"
-                          className="max-h-60 rounded-lg object-cover w-full hover:opacity-95 transition-opacity cursor-pointer"
-                          onClick={() => setPreviewImageUrl(msg.mediaUrl!)}
-                        />
+                      <div className="mb-2 overflow-hidden rounded-xl">
+                        {msg.mediaType === 'video' ? (
+                          <div className="rounded-xl overflow-hidden bg-black/95 shadow-md">
+                            <video
+                              src={msg.mediaUrl}
+                              controls
+                              playsInline
+                              preload="metadata"
+                              className="max-h-72 w-full rounded-xl object-contain bg-black"
+                            />
+                            {msg.fileName && (
+                              <div className="px-2.5 py-1.5 bg-slate-900/95 text-[10px] text-slate-300 flex items-center justify-between border-t border-slate-800">
+                                <span className="truncate max-w-[200px] font-medium">{msg.fileName}</span>
+                                {msg.fileSize && <span className="opacity-75">{formatBytes(msg.fileSize)}</span>}
+                              </div>
+                            )}
+                          </div>
+                        ) : msg.mediaType === 'file' ? (
+                          <a
+                            href={msg.mediaUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={msg.fileName || 'attachment'}
+                            className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
+                              isMe
+                                ? 'bg-blue-700/80 border-blue-400/40 text-white hover:bg-blue-700'
+                                : 'bg-slate-900 border-slate-700 text-slate-100 hover:bg-slate-850'
+                            }`}
+                          >
+                            <div className="p-2 rounded-lg bg-blue-500/20 text-blue-300 shrink-0">
+                              <FileText className="w-5 h-5" />
+                            </div>
+                            <div className="flex-1 min-w-0 text-left">
+                              <p className="font-semibold text-xs truncate">{msg.fileName || 'Document Attachment'}</p>
+                              <p className="text-[10px] opacity-75">
+                                {msg.fileSize ? formatBytes(msg.fileSize) : 'Download Attachment'}
+                              </p>
+                            </div>
+                            <div className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 shrink-0">
+                              <Download className="w-4 h-4" />
+                            </div>
+                          </a>
+                        ) : (
+                          /* Image */
+                          <div className="overflow-hidden rounded-xl">
+                            <img
+                              src={msg.mediaUrl}
+                              alt={msg.fileName || 'Attachment'}
+                              className="max-h-64 rounded-xl object-cover w-full hover:opacity-95 transition-opacity cursor-pointer shadow-md"
+                              onClick={() => setPreviewImageUrl(msg.mediaUrl!)}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -754,23 +864,90 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Only authorized active members can type, attach, or record messages */}
       {isRoomMember && (
         <>
-          {/* Attached Image Preview */}
-          {attachedImage && (
-            <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center gap-3">
-              <div className="relative">
-                <img
-                  src={attachedImage}
-                  alt="Attached preview"
-                  className="w-16 h-16 object-cover rounded-md border border-slate-700"
-                />
-                <button
-                  onClick={() => setAttachedImage(null)}
-                  className="absolute -top-1.5 -right-1.5 bg-red-600 text-white rounded-full p-0.5 hover:bg-red-500 shadow"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+          {/* Media Upload Progress Indicator */}
+          {isUploadingMedia && (
+            <div className="px-4 py-2.5 bg-slate-900/95 border-t border-slate-800 flex flex-col gap-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-2 text-blue-400 font-medium">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                  Uploading attachment...
+                </span>
+                <span className="text-slate-400 font-mono text-[11px] font-semibold">{uploadProgress}%</span>
               </div>
-              <span className="text-xs text-slate-400">Image attached. Press Send or hit Enter.</span>
+              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-200 ease-out"
+                  style={{ width: `${Math.max(8, uploadProgress)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Upload Error Banner */}
+          {uploadError && (
+            <div className="px-4 py-2 bg-red-950/70 border-t border-red-900/60 flex items-center justify-between text-xs text-red-300">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{uploadError}</span>
+              </div>
+              <button
+                onClick={() => setUploadError(null)}
+                className="p-1 hover:bg-red-900/40 rounded text-red-400 hover:text-red-200"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Attached Media Staging Preview */}
+          {attachedMedia && (
+            <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 overflow-hidden">
+                {attachedMedia.type === 'image' && (
+                  <img
+                    src={attachedMedia.url}
+                    alt="Attached preview"
+                    className="w-14 h-14 object-cover rounded-lg border border-slate-700 shrink-0 shadow-sm"
+                  />
+                )}
+                {attachedMedia.type === 'video' && (
+                  <div className="w-14 h-14 rounded-lg bg-indigo-950/60 border border-indigo-800 flex items-center justify-center shrink-0">
+                    <Film className="w-6 h-6 text-indigo-400" />
+                  </div>
+                )}
+                {attachedMedia.type === 'file' && (
+                  <div className="w-14 h-14 rounded-lg bg-amber-950/60 border border-amber-800 flex items-center justify-center shrink-0">
+                    <FileText className="w-6 h-6 text-amber-400" />
+                  </div>
+                )}
+                {attachedMedia.type === 'audio' && (
+                  <div className="w-14 h-14 rounded-lg bg-emerald-950/60 border border-emerald-800 flex items-center justify-center shrink-0">
+                    <Mic className="w-6 h-6 text-emerald-400" />
+                  </div>
+                )}
+
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                      {attachedMedia.type}
+                    </span>
+                    <p className="text-xs font-medium text-slate-200 truncate">
+                      {attachedMedia.fileName || 'Attached file'}
+                    </p>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
+                    {attachedMedia.fileSize ? formatBytes(attachedMedia.fileSize) : 'Ready to send'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setAttachedMedia(null)}
+                title="Remove attachment"
+                className="p-1.5 bg-slate-800 hover:bg-red-900/60 text-slate-400 hover:text-red-300 rounded-lg transition-colors shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           )}
 
@@ -801,32 +978,71 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             /* Input Composer Bar */
             <div className="p-2.5 md:p-3 border-t border-slate-800 bg-slate-900/80">
               <div className="flex items-end gap-1.5 md:gap-2 bg-slate-950 border border-slate-800 rounded-xl p-1.5 md:p-2 focus-within:border-blue-500 transition-colors">
-                {/* Hidden File Input */}
+                {/* Hidden File Inputs */}
                 <input
                   type="file"
-                  ref={fileInputRef}
+                  ref={imageInputRef}
                   accept="image/*"
                   onChange={handleFileUpload}
                   className="hidden"
                 />
+                <input
+                  type="file"
+                  ref={videoInputRef}
+                  accept="video/*"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+                <input
+                  type="file"
+                  ref={docInputRef}
+                  accept="*/*"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
 
-                {/* Attach Image Button */}
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  title="Attach image"
-                  className="p-1.5 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
-                >
-                  <ImageIcon className="w-4 h-4" />
-                </button>
+                {/* Media Attachment Action Buttons */}
+                <div className="flex items-center gap-0.5">
+                  {/* Photo / Image */}
+                  <button
+                    onClick={() => imageInputRef.current?.click()}
+                    title="Send image"
+                    disabled={isUploadingMedia}
+                    className="p-1.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                  >
+                    <ImageIcon className="w-4 h-4" />
+                  </button>
 
-                {/* Voice Record Button */}
-                <button
-                  onClick={startVoiceRecording}
-                  title="Record voice message"
-                  className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
-                >
-                  <Mic className="w-4 h-4" />
-                </button>
+                  {/* Video */}
+                  <button
+                    onClick={() => videoInputRef.current?.click()}
+                    title="Send video"
+                    disabled={isUploadingMedia}
+                    className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                  >
+                    <Film className="w-4 h-4" />
+                  </button>
+
+                  {/* Document / File */}
+                  <button
+                    onClick={() => docInputRef.current?.click()}
+                    title="Attach file or document"
+                    disabled={isUploadingMedia}
+                    className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                  </button>
+
+                  {/* Voice Note */}
+                  <button
+                    onClick={startVoiceRecording}
+                    title="Record voice note"
+                    disabled={isUploadingMedia}
+                    className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                </div>
 
                 {/* Textarea */}
                 <textarea
@@ -873,15 +1089,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 {/* Send Button */}
                 <button
                   onClick={handleSend}
-                  disabled={!inputText.trim() && !attachedImage}
+                  disabled={(!inputText.trim() && !attachedMedia) || isUploadingMedia}
                   title="Send message (Enter)"
                   className={`p-1.5 md:p-2 rounded-lg transition-colors shrink-0 ${
-                    inputText.trim() || attachedImage
-                      ? 'bg-blue-600 text-white hover:bg-blue-500'
+                    (inputText.trim() || attachedMedia) && !isUploadingMedia
+                      ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
                       : 'bg-slate-800 text-slate-600 cursor-not-allowed'
                   }`}
                 >
-                  <Send className="w-4 h-4" />
+                  {isUploadingMedia ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
                 </button>
               </div>
             </div>

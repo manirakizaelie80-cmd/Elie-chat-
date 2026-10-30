@@ -62,6 +62,26 @@
           "type": "number",
           "description": "Timestamp in milliseconds of user account registration"
         },
+        "contacts": {
+          "type": "array",
+          "description": "List of user IDs who are approved contacts for private communication",
+          "items": { "type": "string", "maxLength": 128 }
+        },
+        "blockedUserIds": {
+          "type": "array",
+          "description": "List of user IDs blocked by this user",
+          "items": { "type": "string", "maxLength": 128 }
+        },
+        "privacySettings": {
+          "type": "object",
+          "description": "User privacy controls for discovery and contact requests",
+          "properties": {
+            "whoCanContactMe": { "type": "string", "enum": ["anyone", "contacts_only"] },
+            "showOnlineStatus": { "type": "boolean" },
+            "showLastSeen": { "type": "boolean" },
+            "profileVisibility": { "type": "string", "enum": ["public", "contacts"] }
+          }
+        },
         "location": {
           "type": "object",
           "description": "Geographical location coordinates and country flag",
@@ -337,7 +357,7 @@
         "recipientId": { "type": "string", "maxLength": 128 },
         "type": {
           "type": "string",
-          "enum": ["message", "invitation", "join_request", "request_approved", "request_rejected"]
+          "enum": ["message", "invitation", "join_request", "request_approved", "request_rejected", "contact_request", "contact_accepted"]
         },
         "title": { "type": "string", "maxLength": 100 },
         "message": { "type": "string", "maxLength": 300 },
@@ -405,6 +425,32 @@
         }
       },
       "required": ["id", "callerId", "callerName", "receiverId", "type", "status", "createdAt"]
+    },
+    "ContactRequest": {
+      "title": "ContactRequest",
+      "description": "Contact connection requests between users for private communication authorization",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique request ID",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 128
+        },
+        "senderId": { "type": "string", "maxLength": 128 },
+        "senderName": { "type": "string", "maxLength": 100 },
+        "senderUsername": { "type": "string", "maxLength": 50 },
+        "senderAvatar": { "type": "string", "maxLength": 500000 },
+        "receiverId": { "type": "string", "maxLength": 128 },
+        "receiverUsername": { "type": "string", "maxLength": 50 },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "rejected"]
+        },
+        "createdAt": { "type": "number" },
+        "respondedAt": { "type": "number" }
+      },
+      "required": ["id", "senderId", "senderName", "senderUsername", "receiverId", "receiverUsername", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -431,6 +477,10 @@
     "/join_requests/{requestId}": {
       "schema": "JoinRequest",
       "description": "Stores requests from users to join moderated or private groups."
+    },
+    "/contact_requests/{requestId}": {
+      "schema": "ContactRequest",
+      "description": "Stores 1-on-1 contact connection requests between users."
     },
     "/notifications/{notificationId}": {
       "schema": "Notification",

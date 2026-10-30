@@ -25,6 +25,9 @@ service cloud.firestore {
         && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 500000))
         && (!('peerId' in data) || (data.peerId is string && data.peerId.size() <= 150))
         && (!('readReceiptsEnabled' in data) || data.readReceiptsEnabled is bool)
+        && (!('contacts' in data) || data.contacts is list)
+        && (!('blockedUserIds' in data) || data.blockedUserIds is list)
+        && (!('privacySettings' in data) || data.privacySettings is map)
         && (!('lastActive' in data) || data.lastActive is number)
         && (!('lastSeen' in data) || data.lastSeen is number)
         && (!('createdAt' in data) || data.createdAt is number);
@@ -115,11 +118,25 @@ service cloud.firestore {
         && (!('reviewedAt' in data) || data.reviewedAt is number);
     }
 
+    function isValidContactRequest(data) {
+      return data.keys().hasAll(['id', 'senderId', 'senderName', 'senderUsername', 'receiverId', 'receiverUsername', 'status', 'createdAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.senderId is string && data.senderId.size() <= 128
+        && data.senderName is string && data.senderName.size() <= 100
+        && data.senderUsername is string && data.senderUsername.size() <= 50
+        && data.receiverId is string && data.receiverId.size() <= 128
+        && data.receiverUsername is string && data.receiverUsername.size() <= 50
+        && data.status in ['pending', 'accepted', 'rejected']
+        && data.createdAt is number
+        && (!('senderAvatar' in data) || (data.senderAvatar is string && data.senderAvatar.size() <= 500000))
+        && (!('respondedAt' in data) || data.respondedAt is number);
+    }
+
     function isValidNotification(data) {
       return data.keys().hasAll(['id', 'recipientId', 'type', 'title', 'message', 'read', 'createdAt'])
         && data.id is string && data.id.size() <= 128
         && data.recipientId is string && data.recipientId.size() <= 128
-        && data.type in ['message', 'invitation', 'join_request', 'request_approved', 'request_rejected']
+        && data.type in ['message', 'invitation', 'join_request', 'request_approved', 'request_rejected', 'contact_request', 'contact_accepted']
         && data.title is string && data.title.size() <= 100
         && data.message is string && data.message.size() <= 300
         && data.read is bool
@@ -214,6 +231,18 @@ service cloud.firestore {
         && (request.resource.data.status in ['approved', 'rejected'])
         && request.resource.data.reviewedBy is string
         && isRoomAdmin(getRoom(resource.data.groupId), request.resource.data.reviewedBy);
+      allow delete: if isValidId(requestId);
+    }
+
+    // Direct contact & communication authorization requests
+    match /contact_requests/{requestId} {
+      allow read: if true;
+      allow create: if isValidId(requestId) && isValidContactRequest(request.resource.data) && request.resource.data.id == requestId
+        && request.resource.data.status == 'pending'
+        && request.resource.data.senderId != request.resource.data.receiverId;
+      allow update: if isValidId(requestId) && isValidContactRequest(request.resource.data) && request.resource.data.id == requestId
+        && resource.data.status == 'pending'
+        && (request.resource.data.status in ['accepted', 'rejected']);
       allow delete: if isValidId(requestId);
     }
 

@@ -10,6 +10,7 @@ import { CreateChannelModal } from './components/CreateChannelModal';
 import { MultiTabHelperModal } from './components/MultiTabHelperModal';
 import { AuthModal } from './components/AuthModal';
 import { GroupManagementModal } from './components/GroupManagementModal';
+import { AddContactModal } from './components/AddContactModal';
 import { 
   User, 
   Room, 
@@ -19,11 +20,20 @@ import {
   CallSession, 
   GroupInvitation, 
   JoinRequest,
-  InAppNotification 
+  InAppNotification,
+  ContactRequest
 } from './types';
 import { PeerMeshManager } from './utils/peerMesh';
 import { getUserMediaSafe } from './utils/mediaFallback';
-import { saveUserRealtime, subscribeUsersRealtime, countOnlineUsers } from './utils/userSync';
+import { saveUserRealtime, countOnlineUsers } from './utils/userSync';
+import { 
+  subscribeUserContactsRealtime,
+  subscribeIncomingContactRequests,
+  acceptContactRequest,
+  rejectContactRequest,
+  unblockUser,
+  blockUser
+} from './utils/contactSync';
 import { saveRoomRealtime, deleteRoomRealtime, subscribeRoomsRealtime } from './utils/roomSync';
 import { 
   saveMessageRealtime, 
@@ -261,12 +271,14 @@ export default function App() {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
   const [isMultiTabOpen, setIsMultiTabOpen] = useState(false);
+  const [isAddContactOpen, setIsAddContactOpen] = useState(false);
   const [managingGroup, setManagingGroup] = useState<{ room: Room; initialTab?: 'details' | 'invite' | 'requests' | 'invitations' } | null>(null);
 
   // Group Workflow & Notifications
   const [pendingInvitations, setPendingInvitations] = useState<GroupInvitation[]>([]);
   const [userSubmittedRequests, setUserSubmittedRequests] = useState<JoinRequest[]>([]);
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
+  const [incomingContactRequests, setIncomingContactRequests] = useState<ContactRequest[]>([]);
 
   // Incoming Call State
   const [incomingCallData, setIncomingCallData] = useState<{
@@ -291,6 +303,51 @@ export default function App() {
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
   const activeWebRTCSessionRef = useRef<ActiveWebRTCSession | null>(null);
   const peerMeshRef = useRef<PeerMeshManager | null>(null);
+
+  // Handlers for Contact Requests & Blocking
+  const handleAcceptContactRequest = async (request: ContactRequest) => {
+    try {
+      await acceptContactRequest(request);
+      setCurrentUser((prev) => {
+        const currentContacts = prev.contacts || [];
+        if (currentContacts.includes(request.senderId)) return prev;
+        const updated = {
+          ...prev,
+          contacts: [...currentContacts, request.senderId],
+        };
+        saveUserRealtime(updated, selfPeerId).catch(console.error);
+        return updated;
+      });
+      setIncomingContactRequests((prev) => prev.filter((r) => r.id !== request.id));
+    } catch (err) {
+      console.error('Failed to accept contact request:', err);
+    }
+  };
+
+  const handleRejectContactRequest = async (requestId: string) => {
+    try {
+      await rejectContactRequest(requestId);
+      setIncomingContactRequests((prev) => prev.filter((r) => r.id !== requestId));
+    } catch (err) {
+      console.error('Failed to reject contact request:', err);
+    }
+  };
+
+  const handleUnblockUser = async (targetId: string) => {
+    try {
+      await unblockUser(currentUser.id, targetId);
+      setCurrentUser((prev) => {
+        const updated = {
+          ...prev,
+          blockedUserIds: (prev.blockedUserIds || []).filter((id) => id !== targetId),
+        };
+        saveUserRealtime(updated, selfPeerId).catch(console.error);
+        return updated;
+      });
+    } catch (err) {
+      console.error('Failed to unblock user:', err);
+    }
+  };
 
   // Firebase Auth sync listener
   useEffect(() => {
@@ -359,20 +416,17 @@ export default function App() {
     };
   }, [currentUser, selfPeerId]);
 
-  // Real-Time Firestore Presence: Subscribe to all registered users
+  // Real-Time Firestore Presence & Contacts Subscription: Only approved contacts are loaded (Zero-Public-Discovery)
   useEffect(() => {
-    const unsubscribe = subscribeUsersRealtime((firestoreUsers) => {
+    const contactIds = currentUser.contacts || [];
+    const unsubscribe = subscribeUserContactsRealtime(currentUser.id, contactIds, (approvedContacts) => {
       setUsers(() => {
         const map = new Map<string, User>();
         map.set(currentUser.id, currentUser);
 
-        for (const u of firestoreUsers) {
+        for (const u of approvedContacts) {
           if (u.id === currentUser.id) continue;
-          const isRecentlyActive = typeof u.lastActive === 'number' && Date.now() - u.lastActive < 45000;
-          map.set(u.id, {
-            ...u,
-            status: isRecentlyActive ? (u.status === 'offline' ? 'away' : (u.status || 'online')) : 'offline',
-          });
+          map.set(u.id, u);
         }
         return Array.from(map.values());
       });
@@ -380,6 +434,16 @@ export default function App() {
 
     return () => {
       unsubscribe();
+    };
+  }, [currentUser.id, JSON.stringify(currentUser.contacts || [])]);
+
+  // Real-Time Contact Requests Subscription (Incoming requests)
+  useEffect(() => {
+    const unsub = subscribeIncomingContactRequests(currentUser.id, (reqs) => {
+      setIncomingContactRequests(reqs);
+    });
+    return () => {
+      unsub();
     };
   }, [currentUser.id]);
 
@@ -1129,6 +1193,10 @@ export default function App() {
           onRespondInvitation={handleRespondInvitation}
           onOpenGroupManagement={(g, tab) => setManagingGroup({ room: g, initialTab: tab })}
           onRequestJoinGroup={handleRequestJoinGroup}
+          incomingContactRequests={incomingContactRequests}
+          onAcceptContactRequest={handleAcceptContactRequest}
+          onRejectContactRequest={handleRejectContactRequest}
+          onOpenAddContact={() => setIsAddContactOpen(true)}
         />
 
         {/* Main Workspace: World Map or Live Conversation */}
@@ -1242,6 +1310,7 @@ export default function App() {
           currentUser={currentUser}
           onClose={() => setIsProfileModalOpen(false)}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          onUnblockUser={handleUnblockUser}
           onSave={(updates) => {
             const updated = {
               ...currentUser,
@@ -1250,6 +1319,16 @@ export default function App() {
             setCurrentUser(updated);
             saveUserRealtime(updated, selfPeerId).catch(console.error);
           }}
+        />
+      )}
+
+      {/* Find and Add Contact by Exact @Username Modal */}
+      {isAddContactOpen && (
+        <AddContactModal
+          isOpen={isAddContactOpen}
+          onClose={() => setIsAddContactOpen(false)}
+          currentUser={currentUser}
+          onContactRequestSent={() => {}}
         />
       )}
 

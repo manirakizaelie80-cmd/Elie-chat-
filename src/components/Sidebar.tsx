@@ -19,7 +19,7 @@ import {
   Shield,
   ChevronRight
 } from 'lucide-react';
-import { Room, User, ActiveCall, GroupInvitation } from '../types';
+import { Room, User, ActiveCall, GroupInvitation, ContactRequest } from '../types';
 import { formatLastSeen } from '../utils/userSync';
 import { DEFAULT_AVATAR } from '../utils/photoUpload';
 
@@ -46,6 +46,11 @@ interface SidebarProps {
   onRespondInvitation?: (inv: GroupInvitation, accept: boolean) => void;
   onOpenGroupManagement?: (group: Room, initialTab?: 'details' | 'invite' | 'requests' | 'invitations') => void;
   onRequestJoinGroup?: (group: Room) => void;
+  // Privacy & Contact Request System
+  incomingContactRequests?: ContactRequest[];
+  onAcceptContactRequest?: (request: ContactRequest) => void;
+  onRejectContactRequest?: (requestId: string) => void;
+  onOpenAddContact?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -69,6 +74,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRespondInvitation,
   onOpenGroupManagement,
   onRequestJoinGroup,
+  incomingContactRequests = [],
+  onAcceptContactRequest,
+  onRejectContactRequest,
+  onOpenAddContact,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -347,21 +356,111 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Section 2: Direct Messages (1-on-1) */}
+        {/* Section 2: Contacts & Private Chats (Private, Authorized-Only Directory) */}
         <div>
-          <div className="px-2 mb-1.5 flex items-center justify-between">
-            <span className="text-[11px] font-semibold tracking-wider uppercase text-slate-400">
-              Direct Messages (1-on-1)
-            </span>
-            <span className="text-[10px] text-emerald-400 font-semibold">
-              {onlinePeersCount} online
-            </span>
+          <div className="px-2 mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold tracking-wider uppercase text-slate-400">
+                Contacts ({otherUsers.length})
+              </span>
+              {onlinePeersCount > 0 && (
+                <span className="text-[10px] text-emerald-400 font-semibold">
+                  · {onlinePeersCount} online
+                </span>
+              )}
+            </div>
+            {onOpenAddContact && (
+              <button
+                onClick={onOpenAddContact}
+                className="px-2 py-0.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 hover:text-blue-300 border border-blue-500/30 text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                title="Search known user by exact username"
+              >
+                <UserPlus className="w-3 h-3" />
+                <span>Add</span>
+              </button>
+            )}
           </div>
+
+          {/* Pending Contact Requests Received */}
+          {incomingContactRequests.length > 0 && onAcceptContactRequest && onRejectContactRequest && (
+            <div className="mb-2 p-2 bg-amber-950/30 border border-amber-500/30 rounded-xl space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-amber-300">
+                <span className="flex items-center gap-1">
+                  <UserPlus className="w-3 h-3 text-amber-400" />
+                  Contact Requests ({incomingContactRequests.length})
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {incomingContactRequests.map((req) => (
+                  <div
+                    key={req.id}
+                    className="p-2 bg-slate-900 border border-slate-800 rounded-lg flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      {req.senderAvatar ? (
+                        <img
+                          src={req.senderAvatar}
+                          alt={req.senderName}
+                          className="w-7 h-7 rounded-full object-cover shrink-0"
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = DEFAULT_AVATAR;
+                          }}
+                        />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-slate-800 text-slate-200 flex items-center justify-center text-[10px] font-semibold shrink-0">
+                          {req.senderName[0] || 'U'}
+                        </div>
+                      )}
+                      <div className="min-w-0 text-left">
+                        <p className="text-xs font-semibold text-slate-200 truncate">{req.senderName}</p>
+                        <p className="text-[10px] text-slate-400 truncate">@{req.senderUsername}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => onAcceptContactRequest(req)}
+                        className="p-1 px-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                        title="Accept connection"
+                      >
+                        <Check className="w-2.5 h-2.5" /> Accept
+                      </button>
+                      <button
+                        onClick={() => onRejectContactRequest(req.id)}
+                        className="p-1 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-[10px] transition-colors"
+                        title="Decline"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-0.5">
             {filteredUsers.length === 0 ? (
-              <div className="px-2 py-3 text-center text-xs text-slate-500">
-                {otherUsers.length === 0 ? 'No registered peers yet.' : 'No users match search.'}
+              <div className="px-3 py-4 text-center text-xs text-slate-400 bg-slate-950/40 rounded-xl border border-slate-800/60 my-1">
+                {otherUsers.length === 0 ? (
+                  <div className="space-y-1.5">
+                    <p className="text-slate-300 font-medium">No contacts yet</p>
+                    <p className="text-[11px] text-slate-500">
+                      Your Elie Chat is private. Find and connect with people you know using their unique @username.
+                    </p>
+                    {onOpenAddContact && (
+                      <button
+                        onClick={onOpenAddContact}
+                        className="mt-1 px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 shadow"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Find by @Username</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  'No contacts match search.'
+                )}
               </div>
             ) : (
               filteredUsers.map((user) => {

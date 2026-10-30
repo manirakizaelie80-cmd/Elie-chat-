@@ -7,6 +7,12 @@ export interface UserLocation {
   lng: number;
 }
 
+export interface UserPrivacySettings {
+  whoCanContactMe: 'everyone_with_username' | 'nobody';
+  showOnlineStatus: 'everyone' | 'contacts_only' | 'nobody';
+  showLastSeen: 'everyone' | 'contacts_only' | 'nobody';
+}
+
 export interface User {
   id: string;
   name: string;
@@ -18,9 +24,33 @@ export interface User {
   location?: UserLocation;
   peerId?: string;
   readReceiptsEnabled?: boolean;
+  contacts?: string[]; // IDs of users with accepted contact status
+  blockedUserIds?: string[]; // IDs of users blocked by this user
+  privacySettings?: UserPrivacySettings;
   lastActive: number;
   lastSeen?: number;
   createdAt?: number;
+}
+
+export interface ContactRequest {
+  id: string; // req_senderId_receiverId
+  senderId: string;
+  senderName: string;
+  senderUsername?: string;
+  senderAvatar?: string;
+  receiverId: string;
+  receiverUsername?: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  createdAt: number;
+  respondedAt?: number;
+}
+
+export interface PublicUserProfile {
+  id: string;
+  name: string;
+  username: string;
+  avatar: string;
+  customStatus?: string;
 }
 
 export interface Message {
@@ -105,7 +135,7 @@ export interface JoinRequest {
 export interface InAppNotification {
   id: string;
   recipientId: string;
-  type: 'message' | 'invitation' | 'join_request' | 'request_approved' | 'request_rejected';
+  type: 'message' | 'invitation' | 'join_request' | 'request_approved' | 'request_rejected' | 'contact_request' | 'contact_accepted';
   title: string;
   message: string;
   targetId?: string;

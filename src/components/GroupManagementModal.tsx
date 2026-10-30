@@ -471,7 +471,7 @@ export const GroupManagementModal: React.FC<GroupManagementModalProps> = ({
                         <div className="min-w-0">
                           <p className="text-xs font-medium text-slate-200 truncate">{target.name}</p>
                           <p className="text-[10px] text-slate-500 truncate">
-                            {target.username ? `@${target.username}` : target.email || 'Registered user'}
+                            {target.username ? `@${target.username}` : 'Registered contact'}
                           </p>
                         </div>
                       </div>

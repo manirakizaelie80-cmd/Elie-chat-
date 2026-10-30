@@ -18,7 +18,7 @@ import {
   AlertCircle,
   Image as ImageIcon
 } from 'lucide-react';
-import { User, UserLocation } from '../types';
+import { User, UserLocation, UserPrivacySettings } from '../types';
 import { loginWithGoogle, logoutUser, checkUsernameAvailable, validateUsername } from '../utils/auth';
 import { 
   validateImageFile, 
@@ -38,9 +38,11 @@ interface UserProfileModalProps {
     customStatus: string;
     readReceiptsEnabled?: boolean;
     location?: UserLocation;
+    privacySettings?: UserPrivacySettings;
   }) => void;
   onSwitchPersona?: (personaKey: string) => void;
   onOpenAuthModal?: () => void;
+  onUnblockUser?: (targetUserId: string) => void;
 }
 
 const PRESET_AVATARS = [
@@ -67,6 +69,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   onSave,
   onSwitchPersona,
   onOpenAuthModal,
+  onUnblockUser,
 }) => {
   const [name, setName] = useState(currentUser.name);
   const [username, setUsername] = useState(currentUser.username || '');
@@ -84,6 +87,17 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   const [copiedId, setCopiedId] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Privacy & Access Settings
+  const [whoCanContactMe, setWhoCanContactMe] = useState<'anyone' | 'contacts_only'>(
+    currentUser.privacySettings?.whoCanContactMe || 'anyone'
+  );
+  const [showOnlineStatus, setShowOnlineStatus] = useState<boolean>(
+    currentUser.privacySettings?.showOnlineStatus !== false
+  );
+  const [showLastSeen, setShowLastSeen] = useState<boolean>(
+    currentUser.privacySettings?.showLastSeen !== false
+  );
 
   // Photo Upload & Preview State
   // Photo Upload & Interactive Cropper State
@@ -218,6 +232,12 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
       customStatus: customStatus.trim(),
       readReceiptsEnabled,
       location: selectedLocation,
+      privacySettings: {
+        whoCanContactMe,
+        showOnlineStatus,
+        showLastSeen,
+        profileVisibility: 'public',
+      },
     });
     onClose();
   };
@@ -589,6 +609,102 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               onChange={(e) => setReadReceiptsEnabled(e.target.checked)}
               className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
             />
+          </div>
+
+          {/* Privacy & Account Access Settings */}
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-blue-400" />
+              <span className="text-xs font-semibold text-slate-200">Privacy & Security</span>
+            </div>
+
+            {/* Who can send contact requests */}
+            <div>
+              <label className="block text-[11px] font-medium text-slate-300 mb-1">
+                Who can send you contact requests:
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWhoCanContactMe('anyone')}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border text-left transition-colors ${
+                    whoCanContactMe === 'anyone'
+                      ? 'bg-blue-600/20 border-blue-500 text-blue-300'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <p className="font-semibold">Anyone</p>
+                  <p className="text-[10px] text-slate-400">Via exact username</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWhoCanContactMe('contacts_only')}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border text-left transition-colors ${
+                    whoCanContactMe === 'contacts_only'
+                      ? 'bg-blue-600/20 border-blue-500 text-blue-300'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <p className="font-semibold">Restricted</p>
+                  <p className="text-[10px] text-slate-400">Do not accept new requests</p>
+                </button>
+              </div>
+            </div>
+
+            {/* Online Status & Last Seen Toggles */}
+            <div className="space-y-2 pt-1 border-t border-slate-800/80">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <p className="text-xs text-slate-300">Show Online Status</p>
+                  <p className="text-[10px] text-slate-500">Allow approved contacts to see when you are active</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={showOnlineStatus}
+                  onChange={(e) => setShowOnlineStatus(e.target.checked)}
+                  className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
+                />
+              </label>
+
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <p className="text-xs text-slate-300">Show Last Seen</p>
+                  <p className="text-[10px] text-slate-500">Display last active timestamp to your contacts</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={showLastSeen}
+                  onChange={(e) => setShowLastSeen(e.target.checked)}
+                  className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
+                />
+              </label>
+            </div>
+
+            {/* Blocked Users Count & Management */}
+            {currentUser.blockedUserIds && currentUser.blockedUserIds.length > 0 && (
+              <div className="pt-2 border-t border-slate-800/80">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>Blocked Accounts:</span>
+                  <span className="font-semibold text-amber-400">{currentUser.blockedUserIds.length} users</span>
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  {currentUser.blockedUserIds.map((bId) => (
+                    <div key={bId} className="flex items-center justify-between p-1.5 bg-slate-900 rounded-lg text-xs">
+                      <span className="text-slate-300 font-mono text-[11px] truncate">{bId}</span>
+                      {onUnblockUser && (
+                        <button
+                          type="button"
+                          onClick={() => onUnblockUser(bId)}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-blue-400 text-[10px] font-semibold"
+                        >
+                          Unblock
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Location Selection */}

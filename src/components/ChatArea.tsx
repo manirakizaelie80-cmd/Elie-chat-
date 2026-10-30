@@ -18,6 +18,7 @@ import {
   Download,
   Loader2,
   AlertCircle,
+  Zap,
   Users,
   Radio,
   Sparkles,
@@ -33,7 +34,7 @@ import {
 import { Message, User, Room } from '../types';
 import { formatLastSeen } from '../utils/userSync';
 import { DEFAULT_AVATAR } from '../utils/photoUpload';
-import { uploadChatMedia, formatBytes } from '../utils/mediaUpload';
+import { uploadChatMedia, formatBytes, detectMediaType } from '../utils/mediaUpload';
 import { getConversationId } from '../utils/messageSync';
 
 interface ChatAreaProps {
@@ -91,15 +92,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   // Media Attachment state (Images, Videos, Files, Audio)
   interface AttachedMediaItem {
     url: string;
+    previewUrl?: string;
     type: 'image' | 'video' | 'file' | 'audio';
     fileName: string;
     fileSize: number;
+    originalSize?: number;
+    isReady: boolean;
+    speedMs?: number;
   }
   const [attachedMedia, setAttachedMedia] = useState<AttachedMediaItem | null>(null);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [isPendingAutoSend, setIsPendingAutoSend] = useState(false);
+  const pendingSendRef = useRef<{
+    text: string;
+    replyTo?: { id: string; senderName: string; text: string };
+  } | null>(null);
 
   // Hidden File Inputs
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -146,6 +156,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const handleSend = () => {
     if (!inputText.trim() && !attachedMedia) return;
 
+    // If media is still uploading in the background (<3s target), queue auto-send upon completion
+    if (attachedMedia && !attachedMedia.isReady) {
+      pendingSendRef.current = {
+        text: inputText.trim(),
+        replyTo: replyingTo
+          ? {
+              id: replyingTo.id,
+              senderName: replyingTo.senderName,
+              text: replyingTo.text,
+            }
+          : undefined,
+      };
+      setIsPendingAutoSend(true);
+      setInputText('');
+      setReplyingTo(null);
+      return;
+    }
+
     onSendMessage({
       text: inputText.trim(),
       mediaUrl: attachedMedia?.url,
@@ -165,6 +193,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setAttachedMedia(null);
     setReplyingTo(null);
     setShowEmojiPicker(null);
+    setIsPendingAutoSend(false);
+    pendingSendRef.current = null;
     onSendTyping(false);
   };
 
@@ -173,10 +203,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
+    e.target.value = '';
+
+    const detectedType = detectMediaType(file);
+    const instantLocalUrl = URL.createObjectURL(file);
+
+    // Instant optimistic staging in <10ms for instant user feedback
+    setAttachedMedia({
+      url: instantLocalUrl,
+      previewUrl: instantLocalUrl,
+      type: detectedType,
+      fileName: file.name,
+      fileSize: file.size,
+      isReady: false,
+    });
+
     setIsUploadingMedia(true);
     setUploadProgress(15);
     setUploadError(null);
+
+    const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
 
     try {
       const res = await uploadChatMedia({
@@ -186,18 +232,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         onProgress: (pct) => setUploadProgress(pct),
       });
 
-      setAttachedMedia({
-        url: res.mediaUrl,
-        type: res.mediaType,
-        fileName: res.fileName,
-        fileSize: res.fileSize,
+      // Update staging state with confirmed cloud storage URL and stats
+      setAttachedMedia((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          url: res.mediaUrl,
+          fileSize: res.fileSize,
+          originalSize: res.originalSize,
+          speedMs: res.speedMs,
+          isReady: true,
+        };
       });
+
+      // If user hit send while upload was finishing, auto-dispatch message immediately
+      if (pendingSendRef.current) {
+        const pending = pendingSendRef.current;
+        pendingSendRef.current = null;
+        setIsPendingAutoSend(false);
+        onSendMessage({
+          text: pending.text,
+          mediaUrl: res.mediaUrl,
+          mediaType: res.mediaType,
+          fileName: res.fileName,
+          fileSize: res.fileSize,
+          replyTo: pending.replyTo,
+        });
+        setAttachedMedia(null);
+      }
     } catch (err: any) {
       console.error('Failed to attach media:', err);
       setUploadError(err.message || 'Failed to upload attachment. Please check file size or network.');
+      setAttachedMedia(null);
+      pendingSendRef.current = null;
+      setIsPendingAutoSend(false);
     } finally {
       setIsUploadingMedia(false);
-      e.target.value = '';
     }
   };
 
@@ -899,13 +969,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           )}
 
+          {/* Auto-send Queue Banner */}
+          {isPendingAutoSend && (
+            <div className="px-4 py-1.5 bg-blue-950/70 border-t border-blue-900/60 flex items-center justify-between text-xs text-blue-300 animate-pulse">
+              <div className="flex items-center gap-2">
+                <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+                <span>⚡ Message queued — will send the moment upload finishes (&lt; 3s)...</span>
+              </div>
+              <button
+                onClick={() => {
+                  setIsPendingAutoSend(false);
+                  pendingSendRef.current = null;
+                }}
+                className="p-0.5 hover:bg-blue-900/50 rounded text-blue-400 hover:text-white"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+
           {/* Attached Media Staging Preview */}
           {attachedMedia && (
             <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 overflow-hidden">
                 {attachedMedia.type === 'image' && (
                   <img
-                    src={attachedMedia.url}
+                    src={attachedMedia.previewUrl || attachedMedia.url}
                     alt="Attached preview"
                     className="w-14 h-14 object-cover rounded-lg border border-slate-700 shrink-0 shadow-sm"
                   />
@@ -927,22 +1016,47 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 )}
 
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                       {attachedMedia.type}
                     </span>
-                    <p className="text-xs font-medium text-slate-200 truncate">
+                    <p className="text-xs font-medium text-slate-200 truncate max-w-[200px]">
                       {attachedMedia.fileName || 'Attached file'}
                     </p>
+                    {attachedMedia.speedMs && (
+                      <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-1.5 py-0.5 rounded">
+                        <Zap className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                        {(attachedMedia.speedMs / 1000).toFixed(1)}s
+                      </span>
+                    )}
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
-                    {attachedMedia.fileSize ? formatBytes(attachedMedia.fileSize) : 'Ready to send'}
-                  </p>
+
+                  <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-400 font-mono">
+                    {attachedMedia.originalSize && attachedMedia.originalSize > attachedMedia.fileSize ? (
+                      <span className="text-emerald-400 font-medium">
+                        {formatBytes(attachedMedia.originalSize)} → {formatBytes(attachedMedia.fileSize)}
+                      </span>
+                    ) : (
+                      <span>{attachedMedia.fileSize ? formatBytes(attachedMedia.fileSize) : 'Ready'}</span>
+                    )}
+                    {attachedMedia.isReady ? (
+                      <span className="text-emerald-400 font-sans font-medium">Ready</span>
+                    ) : (
+                      <span className="text-blue-400 font-sans font-medium flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin inline" />
+                        Fast uploading ({uploadProgress}%)
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
               <button
-                onClick={() => setAttachedMedia(null)}
+                onClick={() => {
+                  setAttachedMedia(null);
+                  pendingSendRef.current = null;
+                  setIsPendingAutoSend(false);
+                }}
                 title="Remove attachment"
                 className="p-1.5 bg-slate-800 hover:bg-red-900/60 text-slate-400 hover:text-red-300 rounded-lg transition-colors shrink-0"
               >
@@ -1006,9 +1120,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {/* Photo / Image */}
                   <button
                     onClick={() => imageInputRef.current?.click()}
-                    title="Send image"
-                    disabled={isUploadingMedia}
-                    className="p-1.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                    title="Send image (instant compression < 1s)"
+                    className="p-1.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
                   >
                     <ImageIcon className="w-4 h-4" />
                   </button>
@@ -1016,9 +1129,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {/* Video */}
                   <button
                     onClick={() => videoInputRef.current?.click()}
-                    title="Send video"
-                    disabled={isUploadingMedia}
-                    className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                    title="Send video (high-speed upload)"
+                    className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
                   >
                     <Film className="w-4 h-4" />
                   </button>
@@ -1026,9 +1138,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {/* Document / File */}
                   <button
                     onClick={() => docInputRef.current?.click()}
-                    title="Attach file or document"
-                    disabled={isUploadingMedia}
-                    className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                    title="Attach file or document (fast < 3s)"
+                    className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
                   >
                     <Paperclip className="w-4 h-4" />
                   </button>
@@ -1037,8 +1148,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <button
                     onClick={startVoiceRecording}
                     title="Record voice note"
-                    disabled={isUploadingMedia}
-                    className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0 disabled:opacity-50"
+                    className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
                   >
                     <Mic className="w-4 h-4" />
                   </button>
@@ -1089,15 +1199,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 {/* Send Button */}
                 <button
                   onClick={handleSend}
-                  disabled={(!inputText.trim() && !attachedMedia) || isUploadingMedia}
+                  disabled={!inputText.trim() && !attachedMedia}
                   title="Send message (Enter)"
                   className={`p-1.5 md:p-2 rounded-lg transition-colors shrink-0 ${
-                    (inputText.trim() || attachedMedia) && !isUploadingMedia
+                    inputText.trim() || attachedMedia
                       ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
                       : 'bg-slate-800 text-slate-600 cursor-not-allowed'
                   }`}
                 >
-                  {isUploadingMedia ? (
+                  {isPendingAutoSend ? (
+                    <Zap className="w-4 h-4 animate-pulse text-amber-400 fill-amber-400" />
+                  ) : isUploadingMedia && !inputText.trim() ? (
                     <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
                   ) : (
                     <Send className="w-4 h-4" />

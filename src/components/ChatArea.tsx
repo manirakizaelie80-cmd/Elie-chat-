@@ -19,6 +19,7 @@ import {
   Loader2,
   AlertCircle,
   Zap,
+  RefreshCw,
   Users,
   Radio,
   Sparkles,
@@ -34,8 +35,26 @@ import {
 import { Message, User, Room } from '../types';
 import { formatLastSeen } from '../utils/userSync';
 import { DEFAULT_AVATAR } from '../utils/photoUpload';
-import { uploadChatMedia, formatBytes, detectMediaType } from '../utils/mediaUpload';
+import { uploadChatMediaWithHandle, uploadChatMedia, formatBytes, detectMediaType } from '../utils/mediaUpload';
 import { getConversationId } from '../utils/messageSync';
+
+export interface QueuedMediaItem {
+  id: string;
+  file: File;
+  previewUrl: string;
+  type: 'image' | 'video' | 'file' | 'audio';
+  fileName: string;
+  fileSize: number;
+  originalSize?: number;
+  status: 'pending' | 'uploading' | 'completed' | 'error';
+  progress: number;
+  speedFormatted?: string;
+  timeRemainingFormatted?: string;
+  uploadedUrl?: string;
+  speedMs?: number;
+  errorMessage?: string;
+  cancelHandle?: () => void;
+}
 
 interface ChatAreaProps {
   currentUser: User;
@@ -85,27 +104,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onRequestJoinGroup,
   hasPendingJoinRequest = false,
 }) => {
+  const isRoom = Boolean(currentRoom);
   const [inputText, setInputText] = useState('');
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
-  
-  // Media Attachment state (Images, Videos, Files, Audio)
-  interface AttachedMediaItem {
-    url: string;
-    previewUrl?: string;
-    type: 'image' | 'video' | 'file' | 'audio';
-    fileName: string;
-    fileSize: number;
-    originalSize?: number;
-    isReady: boolean;
-    speedMs?: number;
-  }
-  const [attachedMedia, setAttachedMedia] = useState<AttachedMediaItem | null>(null);
-  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [attachedQueue, setAttachedQueue] = useState<QueuedMediaItem[]>([]);
   const [isPendingAutoSend, setIsPendingAutoSend] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const pendingSendRef = useRef<{
     text: string;
     replyTo?: { id: string; senderName: string; text: string };
@@ -153,11 +158,124 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  const handleSend = () => {
-    if (!inputText.trim() && !attachedMedia) return;
+  // Multi-file upload queue worker with MAX_CONCURRENT = 2
+  useEffect(() => {
+    const MAX_CONCURRENT = 2;
+    const currentlyUploading = attachedQueue.filter((item) => item.status === 'uploading').length;
+    if (currentlyUploading >= MAX_CONCURRENT) return;
 
-    // If media is still uploading in the background (<3s target), queue auto-send upon completion
-    if (attachedMedia && !attachedMedia.isReady) {
+    const nextPending = attachedQueue.find((item) => item.status === 'pending');
+    if (!nextPending) return;
+
+    const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
+
+    const handle = uploadChatMediaWithHandle({
+      file: nextPending.file,
+      conversationId: convId,
+      userId: currentUser.id,
+      onProgress: (ev) => {
+        setAttachedQueue((prev) =>
+          prev.map((item) =>
+            item.id === nextPending.id
+              ? {
+                  ...item,
+                  progress: ev.pct,
+                  speedFormatted: ev.speedFormatted,
+                  timeRemainingFormatted: ev.timeRemainingFormatted,
+                }
+              : item
+          )
+        );
+      },
+    });
+
+    setAttachedQueue((prev) =>
+      prev.map((item) =>
+        item.id === nextPending.id
+          ? {
+              ...item,
+              status: 'uploading',
+              cancelHandle: handle.cancel,
+            }
+          : item
+      )
+    );
+
+    handle.promise
+      .then((res) => {
+        setAttachedQueue((prev) =>
+          prev.map((item) =>
+            item.id === nextPending.id
+              ? {
+                  ...item,
+                  status: 'completed',
+                  progress: 100,
+                  uploadedUrl: res.mediaUrl,
+                  fileSize: res.fileSize,
+                  originalSize: res.originalSize,
+                  speedMs: res.speedMs,
+                }
+              : item
+          )
+        );
+      })
+      .catch((err: any) => {
+        if (err.message?.includes('cancelled')) {
+          setAttachedQueue((prev) => prev.filter((item) => item.id !== nextPending.id));
+        } else {
+          setAttachedQueue((prev) =>
+            prev.map((item) =>
+              item.id === nextPending.id
+                ? {
+                    ...item,
+                    status: 'error',
+                    errorMessage: err.message || 'Upload failed. Tap retry.',
+                  }
+                : item
+            )
+          );
+        }
+      });
+  }, [attachedQueue, isRoom, currentRoom?.id, currentUser.id, directUser?.id]);
+
+  // Auto-send when queued items finish uploading
+  useEffect(() => {
+    if (!isPendingAutoSend || attachedQueue.length === 0) return;
+
+    const hasIncomplete = attachedQueue.some((item) => item.status === 'pending' || item.status === 'uploading');
+    if (hasIncomplete) return;
+
+    const completedItems = attachedQueue.filter((item) => item.status === 'completed' && item.uploadedUrl);
+    if (completedItems.length > 0 && pendingSendRef.current) {
+      const pending = pendingSendRef.current;
+      pendingSendRef.current = null;
+      setIsPendingAutoSend(false);
+
+      completedItems.forEach((item, index) => {
+        onSendMessage({
+          text: index === 0 ? pending.text : '',
+          mediaUrl: item.uploadedUrl,
+          mediaType: item.type,
+          fileName: item.fileName,
+          fileSize: item.fileSize,
+          replyTo: index === 0 ? pending.replyTo : undefined,
+        });
+      });
+
+      setAttachedQueue([]);
+    } else {
+      setIsPendingAutoSend(false);
+    }
+  }, [attachedQueue, isPendingAutoSend, onSendMessage]);
+
+  const handleSend = () => {
+    const hasText = Boolean(inputText.trim());
+    const hasAttachments = attachedQueue.length > 0;
+    if (!hasText && !hasAttachments) return;
+
+    const hasIncomplete = attachedQueue.some((item) => item.status === 'pending' || item.status === 'uploading');
+
+    if (hasIncomplete) {
       pendingSendRef.current = {
         text: inputText.trim(),
         replyTo: replyingTo
@@ -174,23 +292,40 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       return;
     }
 
-    onSendMessage({
-      text: inputText.trim(),
-      mediaUrl: attachedMedia?.url,
-      mediaType: attachedMedia?.type,
-      fileName: attachedMedia?.fileName,
-      fileSize: attachedMedia?.fileSize,
-      replyTo: replyingTo
-        ? {
-            id: replyingTo.id,
-            senderName: replyingTo.senderName,
-            text: replyingTo.text,
-          }
-        : undefined,
-    });
+    const completedItems = attachedQueue.filter((item) => item.status === 'completed' && item.uploadedUrl);
+
+    if (completedItems.length > 0) {
+      completedItems.forEach((item, index) => {
+        onSendMessage({
+          text: index === 0 ? inputText.trim() : '',
+          mediaUrl: item.uploadedUrl,
+          mediaType: item.type,
+          fileName: item.fileName,
+          fileSize: item.fileSize,
+          replyTo: index === 0 && replyingTo
+            ? {
+                id: replyingTo.id,
+                senderName: replyingTo.senderName,
+                text: replyingTo.text,
+              }
+            : undefined,
+        });
+      });
+      setAttachedQueue([]);
+    } else if (hasText) {
+      onSendMessage({
+        text: inputText.trim(),
+        replyTo: replyingTo
+          ? {
+              id: replyingTo.id,
+              senderName: replyingTo.senderName,
+              text: replyingTo.text,
+            }
+          : undefined,
+      });
+    }
 
     setInputText('');
-    setAttachedMedia(null);
     setReplyingTo(null);
     setShowEmojiPicker(null);
     setIsPendingAutoSend(false);
@@ -198,77 +333,57 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     onSendTyping(false);
   };
 
-  // Generic File & Media Attachment Upload (Images, Videos, Documents)
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Multi-File selection handler
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
 
+    const files = Array.from(fileList);
     e.target.value = '';
 
-    const detectedType = detectMediaType(file);
-    const instantLocalUrl = URL.createObjectURL(file);
-
-    // Instant optimistic staging in <10ms for instant user feedback
-    setAttachedMedia({
-      url: instantLocalUrl,
-      previewUrl: instantLocalUrl,
-      type: detectedType,
-      fileName: file.name,
-      fileSize: file.size,
-      isReady: false,
+    const newItems: QueuedMediaItem[] = files.map((file) => {
+      const detectedType = detectMediaType(file);
+      const instantLocalUrl = URL.createObjectURL(file);
+      return {
+        id: `upl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        file,
+        previewUrl: instantLocalUrl,
+        type: detectedType,
+        fileName: file.name,
+        fileSize: file.size,
+        status: 'pending',
+        progress: 0,
+      };
     });
 
-    setIsUploadingMedia(true);
-    setUploadProgress(15);
-    setUploadError(null);
+    setAttachedQueue((prev) => [...prev, ...newItems]);
+  };
 
-    const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
-
-    try {
-      const res = await uploadChatMedia({
-        file,
-        conversationId: convId,
-        userId: currentUser.id,
-        onProgress: (pct) => setUploadProgress(pct),
-      });
-
-      // Update staging state with confirmed cloud storage URL and stats
-      setAttachedMedia((prev) => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          url: res.mediaUrl,
-          fileSize: res.fileSize,
-          originalSize: res.originalSize,
-          speedMs: res.speedMs,
-          isReady: true,
-        };
-      });
-
-      // If user hit send while upload was finishing, auto-dispatch message immediately
-      if (pendingSendRef.current) {
-        const pending = pendingSendRef.current;
-        pendingSendRef.current = null;
-        setIsPendingAutoSend(false);
-        onSendMessage({
-          text: pending.text,
-          mediaUrl: res.mediaUrl,
-          mediaType: res.mediaType,
-          fileName: res.fileName,
-          fileSize: res.fileSize,
-          replyTo: pending.replyTo,
-        });
-        setAttachedMedia(null);
+  const handleCancelAttachment = (id: string) => {
+    const item = attachedQueue.find((q) => q.id === id);
+    if (item && item.cancelHandle) {
+      try {
+        item.cancelHandle();
+      } catch (e) {
+        // Ignored
       }
-    } catch (err: any) {
-      console.error('Failed to attach media:', err);
-      setUploadError(err.message || 'Failed to upload attachment. Please check file size or network.');
-      setAttachedMedia(null);
-      pendingSendRef.current = null;
-      setIsPendingAutoSend(false);
-    } finally {
-      setIsUploadingMedia(false);
     }
+    setAttachedQueue((prev) => prev.filter((q) => q.id !== id));
+  };
+
+  const handleRetryAttachment = (id: string) => {
+    setAttachedQueue((prev) =>
+      prev.map((q) =>
+        q.id === id
+          ? {
+              ...q,
+              status: 'pending',
+              errorMessage: undefined,
+              progress: 0,
+            }
+          : q
+      )
+    );
   };
 
   // Voice note recording
@@ -370,7 +485,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  const isRoom = Boolean(currentRoom);
   const isRoomMember = !isRoom || !currentRoom?.isPrivate || (
     currentRoom.createdById === currentUser.id ||
     (Array.isArray(currentRoom.memberIds) && currentRoom.memberIds.includes(currentUser.id)) ||
@@ -934,47 +1048,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Only authorized active members can type, attach, or record messages */}
       {isRoomMember && (
         <>
-          {/* Media Upload Progress Indicator */}
-          {isUploadingMedia && (
-            <div className="px-4 py-2.5 bg-slate-900/95 border-t border-slate-800 flex flex-col gap-1.5">
-              <div className="flex items-center justify-between text-xs">
-                <span className="flex items-center gap-2 text-blue-400 font-medium">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
-                  Uploading attachment...
-                </span>
-                <span className="text-slate-400 font-mono text-[11px] font-semibold">{uploadProgress}%</span>
-              </div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                <div
-                  className="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-200 ease-out"
-                  style={{ width: `${Math.max(8, uploadProgress)}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Upload Error Banner */}
-          {uploadError && (
-            <div className="px-4 py-2 bg-red-950/70 border-t border-red-900/60 flex items-center justify-between text-xs text-red-300">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                <span>{uploadError}</span>
-              </div>
-              <button
-                onClick={() => setUploadError(null)}
-                className="p-1 hover:bg-red-900/40 rounded text-red-400 hover:text-red-200"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
           {/* Auto-send Queue Banner */}
           {isPendingAutoSend && (
             <div className="px-4 py-1.5 bg-blue-950/70 border-t border-blue-900/60 flex items-center justify-between text-xs text-blue-300 animate-pulse">
               <div className="flex items-center gap-2">
                 <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-                <span>⚡ Message queued — will send the moment upload finishes (&lt; 3s)...</span>
+                <span>⚡ Message queued — will dispatch as soon as upload finishes (&lt; 3s)...</span>
               </div>
               <button
                 onClick={() => {
@@ -988,80 +1067,141 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           )}
 
-          {/* Attached Media Staging Preview */}
-          {attachedMedia && (
-            <div className="p-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 overflow-hidden">
-                {attachedMedia.type === 'image' && (
-                  <img
-                    src={attachedMedia.previewUrl || attachedMedia.url}
-                    alt="Attached preview"
-                    className="w-14 h-14 object-cover rounded-lg border border-slate-700 shrink-0 shadow-sm"
-                  />
+          {/* Attached Media Staging Queue Tray */}
+          {attachedQueue.length > 0 && (
+            <div className="p-3 bg-slate-900 border-t border-slate-800 space-y-2 max-h-48 overflow-y-auto">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                <span className="flex items-center gap-1.5">
+                  <Zap className="w-3 h-3 text-amber-400" />
+                  <span>Attachments ({attachedQueue.filter((i) => i.status === 'completed').length}/{attachedQueue.length} ready)</span>
+                </span>
+                {attachedQueue.length > 1 && (
+                  <button
+                    onClick={() => {
+                      attachedQueue.forEach((i) => i.cancelHandle?.());
+                      setAttachedQueue([]);
+                      setIsPendingAutoSend(false);
+                      pendingSendRef.current = null;
+                    }}
+                    className="text-slate-400 hover:text-red-400 text-[10px] transition-colors"
+                  >
+                    Clear all
+                  </button>
                 )}
-                {attachedMedia.type === 'video' && (
-                  <div className="w-14 h-14 rounded-lg bg-indigo-950/60 border border-indigo-800 flex items-center justify-center shrink-0">
-                    <Film className="w-6 h-6 text-indigo-400" />
-                  </div>
-                )}
-                {attachedMedia.type === 'file' && (
-                  <div className="w-14 h-14 rounded-lg bg-amber-950/60 border border-amber-800 flex items-center justify-center shrink-0">
-                    <FileText className="w-6 h-6 text-amber-400" />
-                  </div>
-                )}
-                {attachedMedia.type === 'audio' && (
-                  <div className="w-14 h-14 rounded-lg bg-emerald-950/60 border border-emerald-800 flex items-center justify-center shrink-0">
-                    <Mic className="w-6 h-6 text-emerald-400" />
-                  </div>
-                )}
-
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                      {attachedMedia.type}
-                    </span>
-                    <p className="text-xs font-medium text-slate-200 truncate max-w-[200px]">
-                      {attachedMedia.fileName || 'Attached file'}
-                    </p>
-                    {attachedMedia.speedMs && (
-                      <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-1.5 py-0.5 rounded">
-                        <Zap className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
-                        {(attachedMedia.speedMs / 1000).toFixed(1)}s
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-400 font-mono">
-                    {attachedMedia.originalSize && attachedMedia.originalSize > attachedMedia.fileSize ? (
-                      <span className="text-emerald-400 font-medium">
-                        {formatBytes(attachedMedia.originalSize)} → {formatBytes(attachedMedia.fileSize)}
-                      </span>
-                    ) : (
-                      <span>{attachedMedia.fileSize ? formatBytes(attachedMedia.fileSize) : 'Ready'}</span>
-                    )}
-                    {attachedMedia.isReady ? (
-                      <span className="text-emerald-400 font-sans font-medium">Ready</span>
-                    ) : (
-                      <span className="text-blue-400 font-sans font-medium flex items-center gap-1">
-                        <Loader2 className="w-3 h-3 animate-spin inline" />
-                        Fast uploading ({uploadProgress}%)
-                      </span>
-                    )}
-                  </div>
-                </div>
               </div>
 
-              <button
-                onClick={() => {
-                  setAttachedMedia(null);
-                  pendingSendRef.current = null;
-                  setIsPendingAutoSend(false);
-                }}
-                title="Remove attachment"
-                className="p-1.5 bg-slate-800 hover:bg-red-900/60 text-slate-400 hover:text-red-300 rounded-lg transition-colors shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              {attachedQueue.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-slate-950/80 border border-slate-800 rounded-xl p-2.5 flex items-center justify-between gap-3 shadow-sm"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    {item.type === 'image' && (
+                      <img
+                        src={item.previewUrl}
+                        alt="Preview"
+                        className="w-11 h-11 object-cover rounded-lg border border-slate-800 shrink-0"
+                      />
+                    )}
+                    {item.type === 'video' && (
+                      <div className="w-11 h-11 rounded-lg bg-indigo-950/60 border border-indigo-800 flex items-center justify-center shrink-0">
+                        <Film className="w-5 h-5 text-indigo-400" />
+                      </div>
+                    )}
+                    {item.type === 'file' && (
+                      <div className="w-11 h-11 rounded-lg bg-amber-950/60 border border-amber-800 flex items-center justify-center shrink-0">
+                        <FileText className="w-5 h-5 text-amber-400" />
+                      </div>
+                    )}
+                    {item.type === 'audio' && (
+                      <div className="w-11 h-11 rounded-lg bg-emerald-950/60 border border-emerald-800 flex items-center justify-center shrink-0">
+                        <Mic className="w-5 h-5 text-emerald-400" />
+                      </div>
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                          {item.type}
+                        </span>
+                        <p className="text-xs font-medium text-slate-200 truncate max-w-[180px] md:max-w-xs">
+                          {item.fileName}
+                        </p>
+                        {item.speedMs && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 px-1.5 py-0.5 rounded">
+                            <Zap className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                            {(item.speedMs / 1000).toFixed(1)}s
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Progress and status details */}
+                      <div className="mt-1 flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                        {item.status === 'completed' ? (
+                          <span className="text-emerald-400 font-medium flex items-center gap-1">
+                            <Check className="w-3 h-3 text-emerald-400 inline" />
+                            Ready · {formatBytes(item.fileSize)}
+                            {item.originalSize && item.originalSize > item.fileSize && (
+                              <span className="text-slate-500 font-normal">
+                                ({Math.round((1 - item.fileSize / item.originalSize) * 100)}% compressed)
+                              </span>
+                            )}
+                          </span>
+                        ) : item.status === 'uploading' ? (
+                          <div className="flex items-center gap-2 text-blue-400 font-medium w-full">
+                            <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                            <span>{item.progress}%</span>
+                            {item.speedFormatted && <span>· {item.speedFormatted}</span>}
+                            {item.timeRemainingFormatted && <span className="text-slate-400">· {item.timeRemainingFormatted}</span>}
+                          </div>
+                        ) : item.status === 'pending' ? (
+                          <span className="text-slate-500 flex items-center gap-1">
+                            <Clock className="w-3 h-3 inline" />
+                            Queued ({formatBytes(item.fileSize)})
+                          </span>
+                        ) : (
+                          <span className="text-red-400 font-medium flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3 inline" />
+                            {item.errorMessage || 'Failed'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Progress Bar for uploading item */}
+                      {item.status === 'uploading' && (
+                        <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden mt-1.5">
+                          <div
+                            className="bg-gradient-to-r from-blue-500 to-indigo-500 h-full rounded-full transition-all duration-150 ease-out"
+                            style={{ width: `${Math.max(5, item.progress)}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Actions: Retry or Cancel */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {item.status === 'error' && (
+                      <button
+                        onClick={() => handleRetryAttachment(item.id)}
+                        title="Retry upload"
+                        className="px-2 py-1 bg-red-950/80 hover:bg-red-900 border border-red-800 text-red-300 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Retry</span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => handleCancelAttachment(item.id)}
+                      title="Cancel / remove"
+                      className="p-1 hover:bg-slate-800 text-slate-400 hover:text-red-300 rounded-lg transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -1097,6 +1237,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   type="file"
                   ref={imageInputRef}
                   accept="image/*"
+                  multiple
                   onChange={handleFileUpload}
                   className="hidden"
                 />
@@ -1111,6 +1252,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   type="file"
                   ref={docInputRef}
                   accept="*/*"
+                  multiple
                   onChange={handleFileUpload}
                   className="hidden"
                 />
@@ -1120,7 +1262,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {/* Photo / Image */}
                   <button
                     onClick={() => imageInputRef.current?.click()}
-                    title="Send image (instant compression < 1s)"
+                    title="Send images (instant compression < 1s, multi-select)"
                     className="p-1.5 text-slate-400 hover:text-blue-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
                   >
                     <ImageIcon className="w-4 h-4" />
@@ -1138,7 +1280,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {/* Document / File */}
                   <button
                     onClick={() => docInputRef.current?.click()}
-                    title="Attach file or document (fast < 3s)"
+                    title="Attach files or documents (fast < 3s, multi-select)"
                     className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition-colors shrink-0"
                   >
                     <Paperclip className="w-4 h-4" />
@@ -1199,17 +1341,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 {/* Send Button */}
                 <button
                   onClick={handleSend}
-                  disabled={!inputText.trim() && !attachedMedia}
+                  disabled={!inputText.trim() && attachedQueue.length === 0}
                   title="Send message (Enter)"
                   className={`p-1.5 md:p-2 rounded-lg transition-colors shrink-0 ${
-                    inputText.trim() || attachedMedia
+                    inputText.trim() || attachedQueue.length > 0
                       ? 'bg-blue-600 text-white hover:bg-blue-500 shadow-sm'
                       : 'bg-slate-800 text-slate-600 cursor-not-allowed'
                   }`}
                 >
                   {isPendingAutoSend ? (
                     <Zap className="w-4 h-4 animate-pulse text-amber-400 fill-amber-400" />
-                  ) : isUploadingMedia && !inputText.trim() ? (
+                  ) : attachedQueue.some((i) => i.status === 'uploading') && !inputText.trim() ? (
                     <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
                   ) : (
                     <Send className="w-4 h-4" />

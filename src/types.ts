@@ -8,9 +8,10 @@ export interface UserLocation {
 }
 
 export interface UserPrivacySettings {
-  whoCanContactMe: 'everyone_with_username' | 'nobody';
-  showOnlineStatus: 'everyone' | 'contacts_only' | 'nobody';
-  showLastSeen: 'everyone' | 'contacts_only' | 'nobody';
+  whoCanContactMe: 'everyone_with_username' | 'anyone' | 'contacts_only' | 'nobody';
+  showOnlineStatus: boolean | 'everyone' | 'contacts_only' | 'nobody';
+  showLastSeen: boolean | 'everyone' | 'contacts_only' | 'nobody';
+  profileVisibility?: 'public' | 'contacts';
 }
 
 export interface User {
@@ -74,7 +75,7 @@ export interface Message {
     senderName: string;
     text: string;
   };
-  status?: 'sent' | 'delivered' | 'read';
+  status?: 'sending' | 'sent' | 'delivered' | 'read';
   readBy?: string[];
   readAt?: number;
   timestamp: number;

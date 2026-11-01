@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { TopNav } from './components/TopNav';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -11,6 +11,7 @@ import { MultiTabHelperModal } from './components/MultiTabHelperModal';
 import { AuthModal } from './components/AuthModal';
 import { GroupManagementModal } from './components/GroupManagementModal';
 import { AddContactModal } from './components/AddContactModal';
+import { AllContactsModal } from './components/AllContactsModal';
 import { 
   User, 
   Room, 
@@ -32,7 +33,8 @@ import {
   acceptContactRequest,
   rejectContactRequest,
   unblockUser,
-  blockUser
+  blockUser,
+  removeContact
 } from './utils/contactSync';
 import { saveRoomRealtime, deleteRoomRealtime, subscribeRoomsRealtime } from './utils/roomSync';
 import { 
@@ -272,6 +274,7 @@ export default function App() {
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
   const [isMultiTabOpen, setIsMultiTabOpen] = useState(false);
   const [isAddContactOpen, setIsAddContactOpen] = useState(false);
+  const [isAllContactsOpen, setIsAllContactsOpen] = useState(false);
   const [managingGroup, setManagingGroup] = useState<{ room: Room; initialTab?: 'details' | 'invite' | 'requests' | 'invitations' } | null>(null);
 
   // Group Workflow & Notifications
@@ -279,6 +282,7 @@ export default function App() {
   const [userSubmittedRequests, setUserSubmittedRequests] = useState<JoinRequest[]>([]);
   const [notifications, setNotifications] = useState<InAppNotification[]>([]);
   const [incomingContactRequests, setIncomingContactRequests] = useState<ContactRequest[]>([]);
+  const [allRecentMessages, setAllRecentMessages] = useState<Message[]>([]);
 
   // Incoming Call State
   const [incomingCallData, setIncomingCallData] = useState<{
@@ -346,6 +350,26 @@ export default function App() {
       });
     } catch (err) {
       console.error('Failed to unblock user:', err);
+    }
+  };
+
+  const handleRemoveContact = async (contactId: string) => {
+    try {
+      await removeContact(currentUser.id, contactId);
+      setCurrentUser((prev) => {
+        const updated = {
+          ...prev,
+          contacts: (prev.contacts || []).filter((id) => id !== contactId),
+        };
+        saveUserRealtime(updated, selfPeerId).catch(console.error);
+        return updated;
+      });
+      if (activeDirectUserId === contactId) {
+        setActiveDirectUserId(null);
+        setActiveRoomId('global-connect');
+      }
+    } catch (err) {
+      console.error('Failed to remove contact:', err);
     }
   };
 
@@ -509,11 +533,15 @@ export default function App() {
       conversationId,
       (cloudMessages: Message[]) => {
         setMessages((prev) => {
+          const pendingSending = prev.filter((m) => m.status === 'sending');
           if (cloudMessages.length === 0) {
             const initialForRoom = INITIAL_MESSAGES.filter((m) => m.targetId === targetId);
-            return initialForRoom.length > 0 ? initialForRoom : [];
+            const base = initialForRoom.length > 0 ? initialForRoom : [];
+            return [...base, ...pendingSending];
           }
-          return cloudMessages;
+          const cloudIds = new Set(cloudMessages.map((m) => m.id));
+          const stillPending = pendingSending.filter((m) => !cloudIds.has(m.id));
+          return [...cloudMessages, ...stillPending];
         });
 
         // Mark incoming messages as delivered
@@ -533,9 +561,10 @@ export default function App() {
     };
   }, [activeRoomId, activeDirectUserId, currentUser.id, currentUser.readReceiptsEnabled, rooms]);
 
-  // Real-Time Firestore Subscription: Track unread counts across all conversations
+  // Real-Time Firestore Subscription: Track all messages & unread counts
   useEffect(() => {
     const unsubscribe = subscribeAllMessagesRealtime((allMessages: Message[]) => {
+      setAllRecentMessages(allMessages);
       const counts: Record<string, number> = {};
 
       allMessages.forEach((msg: Message) => {
@@ -554,6 +583,36 @@ export default function App() {
       unsubscribe();
     };
   }, [currentUser.id]);
+
+  // Derive Recent Chatted Contacts (active conversations with known contacts)
+  const recentChattedContacts = useMemo(() => {
+    const otherContacts = users.filter((u) => u.id !== currentUser.id);
+    const list: { user: User; lastMessage?: Message; unreadCount: number }[] = [];
+
+    otherContacts.forEach((contact) => {
+      const contactMsgs = allRecentMessages.filter(
+        (m) =>
+          !m.isGroup &&
+          ((m.senderId === currentUser.id && m.targetId === contact.id) ||
+            (m.senderId === contact.id && m.targetId === currentUser.id))
+      );
+
+      const convId = [currentUser.id, contact.id].sort().join('__');
+      const unread = unreadCounts[convId] || 0;
+
+      if (contactMsgs.length > 0) {
+        const sorted = [...contactMsgs].sort((a, b) => b.timestamp - a.timestamp);
+        list.push({
+          user: contact,
+          lastMessage: sorted[0],
+          unreadCount: unread,
+        });
+      }
+    });
+
+    list.sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
+    return list;
+  }, [users, allRecentMessages, currentUser.id, unreadCounts]);
 
   // Real-Time Firestore Subscription: Incoming WebRTC Call Signaling
   useEffect(() => {
@@ -1008,8 +1067,9 @@ export default function App() {
     }
   };
 
-  // Send Message (Real Firestore Cloud Persistence)
+  // Send Message (Instant Optimistic Local Render in Microseconds + Real Firestore Cloud Persistence)
   const handleSendMessage = async (payload: {
+    id?: string;
     text: string;
     mediaUrl?: string;
     mediaType?: 'image' | 'video' | 'file' | 'audio';
@@ -1018,7 +1078,8 @@ export default function App() {
     voiceAudio?: string;
     voiceDuration?: number;
     replyTo?: { id: string; senderName: string; text: string };
-  }) => {
+    status?: 'sending' | 'sent';
+  }): Promise<string> => {
     const isGroup = activeDirectUserId === null;
     const targetId = isGroup ? activeRoomId! : activeDirectUserId!;
 
@@ -1027,14 +1088,15 @@ export default function App() {
       const room = rooms.find((r) => r.id === targetId);
       if (room?.isPrivate && !isGroupMember(room, currentUser.id)) {
         alert('Access denied: You must be an approved active member to send messages to this private group.');
-        return;
+        return '';
       }
     }
 
     const conversationId = getConversationId(currentUser.id, targetId, isGroup);
+    const msgId = payload.id || `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     const newMsg: Message = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: msgId,
       conversationId,
       targetId,
       isGroup,
@@ -1049,14 +1111,40 @@ export default function App() {
       voiceAudio: payload.voiceAudio,
       voiceDuration: payload.voiceDuration,
       replyTo: payload.replyTo,
-      status: 'sent',
+      status: payload.status || 'sent',
       readBy: [currentUser.id],
       reactions: {},
       timestamp: Date.now(),
     };
 
+    // Instant local state update (< 0.1ms)
     setMessages((prev) => [...prev, newMsg]);
-    await saveMessageRealtime(newMsg).catch(console.error);
+
+    if (newMsg.status !== 'sending') {
+      await saveMessageRealtime(newMsg).catch(console.error);
+    }
+
+    return msgId;
+  };
+
+  // Update existing optimistic message with uploaded media URL and save to Firestore
+  const handleUpdateMessage = async (messageId: string, updates: Partial<Message>) => {
+    setMessages((prev) => {
+      let savedMsg: Message | null = null;
+      const next = prev.map((m) => {
+        if (m.id === messageId) {
+          savedMsg = { ...m, ...updates };
+          return savedMsg;
+        }
+        return m;
+      });
+
+      if (savedMsg) {
+        saveMessageRealtime(savedMsg).catch(console.error);
+      }
+
+      return next;
+    });
   };
 
   // Send Reaction
@@ -1156,12 +1244,15 @@ export default function App() {
         isMobileSidebarOpen={mobileScreen === 'sidebar'}
         notifications={notifications}
         onSelectNotification={handleSelectNotification}
+        onOpenAllContacts={() => setIsAllContactsOpen(true)}
+        contactsCount={users.filter((u) => u.id !== currentUser.id).length}
       />
 
       {/* Main App Workspace */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Real-time Sidebar with Channels, Direct Peers, and Unread Counts */}
         <Sidebar
+          currentUser={currentUser}
           rooms={rooms}
           activeRoomId={activeRoomId}
           onSelectRoom={(roomId) => {
@@ -1197,6 +1288,9 @@ export default function App() {
           onAcceptContactRequest={handleAcceptContactRequest}
           onRejectContactRequest={handleRejectContactRequest}
           onOpenAddContact={() => setIsAddContactOpen(true)}
+          recentChattedContacts={recentChattedContacts}
+          onOpenAllContacts={() => setIsAllContactsOpen(true)}
+          onOpenProfile={() => setIsProfileModalOpen(true)}
         />
 
         {/* Main Workspace: World Map or Live Conversation */}
@@ -1228,6 +1322,7 @@ export default function App() {
               messages={filteredMessages}
               typingUsers={activeTyping}
               onSendMessage={handleSendMessage}
+              onUpdateMessage={handleUpdateMessage}
               onSendReaction={handleSendReaction}
               onSendTyping={handleSendTyping}
               onStartCall={(type) => {
@@ -1311,6 +1406,8 @@ export default function App() {
           onClose={() => setIsProfileModalOpen(false)}
           onOpenAuthModal={() => setIsAuthModalOpen(true)}
           onUnblockUser={handleUnblockUser}
+          onOpenAllContacts={() => setIsAllContactsOpen(true)}
+          contactsCount={users.filter((u) => u.id !== currentUser.id).length}
           onSave={(updates) => {
             const updated = {
               ...currentUser,
@@ -1329,6 +1426,29 @@ export default function App() {
           onClose={() => setIsAddContactOpen(false)}
           currentUser={currentUser}
           onContactRequestSent={() => {}}
+        />
+      )}
+
+      {/* All My Known Contacts Directory Modal */}
+      {isAllContactsOpen && (
+        <AllContactsModal
+          isOpen={isAllContactsOpen}
+          onClose={() => setIsAllContactsOpen(false)}
+          currentUser={currentUser}
+          contacts={users}
+          unreadCounts={unreadCounts}
+          onSelectDirectUser={(userId) => {
+            setActiveDirectUserId(userId);
+            setActiveRoomId(null);
+            setMobileScreen('chat');
+          }}
+          onStartCall={(targetUser, type) => {
+            setActiveDirectUserId(targetUser.id);
+            setMobileScreen('chat');
+            handleStartCall(type, targetUser);
+          }}
+          onRemoveContact={handleRemoveContact}
+          onOpenAddContact={() => setIsAddContactOpen(true)}
         />
       )}
 

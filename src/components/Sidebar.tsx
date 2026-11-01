@@ -17,13 +17,23 @@ import {
   UserCheck,
   UserPlus,
   Shield,
-  ChevronRight
+  ChevronRight,
+  MessageSquare,
+  MessageCircle,
+  ExternalLink
 } from 'lucide-react';
-import { Room, User, ActiveCall, GroupInvitation, ContactRequest } from '../types';
+import { Room, User, ActiveCall, GroupInvitation, ContactRequest, Message } from '../types';
 import { formatLastSeen } from '../utils/userSync';
 import { DEFAULT_AVATAR } from '../utils/photoUpload';
 
+export interface RecentChattedContact {
+  user: User;
+  lastMessage?: Message;
+  unreadCount: number;
+}
+
 interface SidebarProps {
+  currentUser: User;
   rooms: Room[];
   activeRoomId: string | null;
   onSelectRoom: (roomId: string) => void;
@@ -51,9 +61,34 @@ interface SidebarProps {
   onAcceptContactRequest?: (request: ContactRequest) => void;
   onRejectContactRequest?: (requestId: string) => void;
   onOpenAddContact?: () => void;
+  // Recent Chatted Contacts & All Contacts Directory
+  recentChattedContacts?: RecentChattedContact[];
+  onOpenAllContacts?: () => void;
+  onOpenProfile?: () => void;
+}
+
+function formatRecentTime(timestamp?: number): string {
+  if (!timestamp) return '';
+  const now = Date.now();
+  const diff = now - timestamp;
+  if (diff < 60000) return 'Just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+  if (diff < 172800000) return '1d';
+  return new Date(timestamp).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
+}
+
+function formatMessageSnippet(msg?: Message): string {
+  if (!msg) return 'No messages yet';
+  if (msg.voiceAudio) return '🎙️ Voice note';
+  if (msg.mediaType === 'image') return '📷 Photo';
+  if (msg.mediaType === 'video') return '🎥 Video';
+  if (msg.mediaType === 'file') return `📎 ${msg.fileName || 'Attachment'}`;
+  return msg.text || 'Message';
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  currentUser,
   rooms,
   activeRoomId,
   onSelectRoom,
@@ -78,6 +113,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onAcceptContactRequest,
   onRejectContactRequest,
   onOpenAddContact,
+  recentChattedContacts = [],
+  onOpenAllContacts,
+  onOpenProfile,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -139,6 +177,80 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <X className="w-4 h-4" />
           </button>
         )}
+      </div>
+
+      {/* User Account Overview Card: Known Contacts Counter & View All My Contacts Option */}
+      <div className="p-3 border-b border-slate-800/80 bg-slate-950/70 shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div 
+            onClick={onOpenProfile} 
+            className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer group"
+            title="Account profile & settings"
+          >
+            <div className="relative shrink-0">
+              <img
+                src={currentUser?.avatar || DEFAULT_AVATAR}
+                alt={currentUser?.name || 'User'}
+                referrerPolicy="no-referrer"
+                className="w-9 h-9 rounded-full object-cover border border-slate-700 group-hover:border-blue-500 transition-colors"
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = DEFAULT_AVATAR;
+                }}
+              />
+              <span
+                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-slate-900 ${
+                  currentUser?.status === 'online'
+                    ? 'bg-emerald-500'
+                    : currentUser?.status === 'away'
+                    ? 'bg-amber-500'
+                    : currentUser?.status === 'busy'
+                    ? 'bg-red-500'
+                    : 'bg-slate-600'
+                }`}
+              />
+            </div>
+            <div className="min-w-0 text-left">
+              <p className="text-xs font-bold text-slate-100 truncate group-hover:text-blue-400 transition-colors">
+                {currentUser?.name}
+              </p>
+              <p className="text-[10px] text-slate-400 truncate">
+                {currentUser?.username ? `@${currentUser.username}` : 'Private Account'}
+              </p>
+            </div>
+          </div>
+
+          {onOpenProfile && (
+            <button
+              onClick={onOpenProfile}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+              title="Account Settings"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Known Contacts Counter & View All Option Button */}
+        <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-1.5">
+            <Users className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-[11px] font-semibold text-slate-200">
+              {otherUsers.length} Known Contact{otherUsers.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {onOpenAllContacts && (
+            <button
+              onClick={onOpenAllContacts}
+              className="text-[11px] font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-0.5 transition-colors px-2 py-0.5 rounded-md hover:bg-blue-600/15"
+              title="Open full contacts directory"
+            >
+              <span>View all my contacts</span>
+              <ChevronRight className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Pending Group Invitations Banner */}
@@ -356,6 +468,97 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
+        {/* Section: Recent Chatted Contacts */}
+        <div className="pb-1 border-b border-slate-800/80 mb-2">
+          <div className="px-2 mb-1.5 flex items-center justify-between">
+            <span className="text-[11px] font-semibold tracking-wider uppercase text-slate-400 flex items-center gap-1.5">
+              <MessageCircle className="w-3.5 h-3.5 text-blue-400" />
+              <span>Recent Chats ({recentChattedContacts.length})</span>
+            </span>
+            {recentChattedContacts.length > 0 && onOpenAllContacts && (
+              <button
+                onClick={onOpenAllContacts}
+                className="text-[10px] text-blue-400 hover:text-blue-300 font-medium"
+              >
+                All Contacts
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-0.5">
+            {recentChattedContacts.length === 0 ? (
+              <div className="px-3 py-2 text-center text-[11px] text-slate-500 bg-slate-950/20 rounded-lg mx-1 border border-dashed border-slate-800">
+                No recent direct chats yet
+              </div>
+            ) : (
+              recentChattedContacts.map(({ user, lastMessage, unreadCount }) => {
+                const isSelected = activeDirectUserId === user.id;
+                const isOnline = user.status === 'online' || user.status === 'in-call';
+
+                return (
+                  <div
+                    key={`recent-${user.id}`}
+                    onClick={() => handleDirectUserClick(user.id)}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium cursor-pointer transition-colors group ${
+                      isSelected
+                        ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
+                        : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 truncate flex-1 min-w-0 mr-1.5">
+                      <div className="relative shrink-0">
+                        <img
+                          src={user.avatar || DEFAULT_AVATAR}
+                          alt={user.name}
+                          referrerPolicy="no-referrer"
+                          className="w-8 h-8 rounded-full object-cover"
+                          onError={(e) => {
+                            e.currentTarget.onerror = null;
+                            e.currentTarget.src = DEFAULT_AVATAR;
+                          }}
+                        />
+                        <span
+                          className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-slate-900 ${
+                            isOnline
+                              ? 'bg-emerald-500'
+                              : user.status === 'away'
+                              ? 'bg-amber-500'
+                              : 'bg-slate-600'
+                          }`}
+                        />
+                      </div>
+
+                      <div className="truncate text-left flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="truncate block font-semibold text-slate-200">
+                            {user.name}
+                          </span>
+                          {lastMessage?.timestamp && (
+                            <span className="text-[10px] text-slate-400 shrink-0 font-normal">
+                              {formatRecentTime(lastMessage.timestamp)}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[11px] text-slate-400 truncate block">
+                            {formatMessageSnippet(lastMessage)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {unreadCount > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-blue-600 text-white text-[10px] font-bold shrink-0 ml-1">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
         {/* Section 2: Contacts & Private Chats (Private, Authorized-Only Directory) */}
         <div>
           <div className="px-2 mb-2 flex items-center justify-between">
@@ -369,16 +572,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </span>
               )}
             </div>
-            {onOpenAddContact && (
-              <button
-                onClick={onOpenAddContact}
-                className="px-2 py-0.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 hover:text-blue-300 border border-blue-500/30 text-[10px] font-semibold flex items-center gap-1 transition-colors"
-                title="Search known user by exact username"
-              >
-                <UserPlus className="w-3 h-3" />
-                <span>Add</span>
-              </button>
-            )}
+            <div className="flex items-center gap-1">
+              {onOpenAllContacts && (
+                <button
+                  onClick={onOpenAllContacts}
+                  className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                  title="View all my contacts"
+                >
+                  <Users className="w-3 h-3 text-blue-400" />
+                  <span>View All</span>
+                </button>
+              )}
+              {onOpenAddContact && (
+                <button
+                  onClick={onOpenAddContact}
+                  className="px-2 py-0.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 hover:text-blue-300 border border-blue-500/30 text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                  title="Search known user by exact username"
+                >
+                  <UserPlus className="w-3 h-3" />
+                  <span>Add</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Pending Contact Requests Received */}

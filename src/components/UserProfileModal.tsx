@@ -16,7 +16,9 @@ import {
   Upload,
   Trash2,
   AlertCircle,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Users,
+  ExternalLink
 } from 'lucide-react';
 import { User, UserLocation, UserPrivacySettings } from '../types';
 import { loginWithGoogle, logoutUser, checkUsernameAvailable, validateUsername } from '../utils/auth';
@@ -43,6 +45,8 @@ interface UserProfileModalProps {
   onSwitchPersona?: (personaKey: string) => void;
   onOpenAuthModal?: () => void;
   onUnblockUser?: (targetUserId: string) => void;
+  onOpenAllContacts?: () => void;
+  contactsCount?: number;
 }
 
 const PRESET_AVATARS = [
@@ -70,6 +74,8 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   onSwitchPersona,
   onOpenAuthModal,
   onUnblockUser,
+  onOpenAllContacts,
+  contactsCount,
 }) => {
   const [name, setName] = useState(currentUser.name);
   const [username, setUsername] = useState(currentUser.username || '');
@@ -90,13 +96,15 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
   // Privacy & Access Settings
   const [whoCanContactMe, setWhoCanContactMe] = useState<'anyone' | 'contacts_only'>(
-    currentUser.privacySettings?.whoCanContactMe || 'anyone'
+    currentUser.privacySettings?.whoCanContactMe === 'contacts_only' || currentUser.privacySettings?.whoCanContactMe === 'nobody'
+      ? 'contacts_only'
+      : 'anyone'
   );
   const [showOnlineStatus, setShowOnlineStatus] = useState<boolean>(
-    currentUser.privacySettings?.showOnlineStatus !== false
+    currentUser.privacySettings?.showOnlineStatus !== false && currentUser.privacySettings?.showOnlineStatus !== 'nobody'
   );
   const [showLastSeen, setShowLastSeen] = useState<boolean>(
-    currentUser.privacySettings?.showLastSeen !== false
+    currentUser.privacySettings?.showLastSeen !== false && currentUser.privacySettings?.showLastSeen !== 'nobody'
   );
 
   // Photo Upload & Preview State
@@ -609,6 +617,34 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
               onChange={(e) => setReadReceiptsEnabled(e.target.checked)}
               className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
             />
+          </div>
+
+          {/* Known Contacts Summary & View All Option */}
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shrink-0">
+                <Users className="w-4 h-4" />
+              </div>
+              <div className="text-left">
+                <span className="text-xs font-semibold text-slate-200">
+                  Known Contacts ({contactsCount !== undefined ? contactsCount : (currentUser.contacts || []).length})
+                </span>
+                <p className="text-[10px] text-slate-400">Authorized private communication peers</p>
+              </div>
+            </div>
+            {onOpenAllContacts && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenAllContacts();
+                }}
+                className="px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 hover:text-white border border-blue-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0"
+              >
+                <span>View All</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
           {/* Privacy & Account Access Settings */}

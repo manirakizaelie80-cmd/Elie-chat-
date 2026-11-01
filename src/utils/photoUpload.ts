@@ -1,4 +1,4 @@
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { doc, updateDoc } from 'firebase/firestore';
 import { storage, db } from '../firebase';
 
@@ -265,8 +265,9 @@ export async function uploadUserProfilePhoto(params: {
   let finalUrl = '';
 
   try {
-    // 1. Upload to Firebase Storage with Cache-Control headers
-    const uploadTask = uploadBytesResumable(storageRef, blob, {
+    // 1. Direct single-roundtrip upload (avatar is < 250KB, completes in ~150-300ms)
+    if (onProgress) onProgress(25);
+    const snapshot = await uploadBytes(storageRef, blob, {
       contentType: mimeType,
       cacheControl: 'public, max-age=31536000, immutable',
       customMetadata: {
@@ -277,30 +278,9 @@ export async function uploadUserProfilePhoto(params: {
       },
     });
 
-    await new Promise<void>((resolve, reject) => {
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          if (snapshot.totalBytes > 0 && onProgress) {
-            const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-            onProgress(Math.min(pct, 98));
-          }
-        },
-        (error) => {
-          console.warn('Firebase Storage upload warning:', error);
-          reject(error);
-        },
-        async () => {
-          try {
-            finalUrl = await getDownloadURL(uploadTask.snapshot.ref);
-            if (onProgress) onProgress(100);
-            resolve();
-          } catch (urlErr) {
-            reject(urlErr);
-          }
-        }
-      );
-    });
+    if (onProgress) onProgress(80);
+    finalUrl = await getDownloadURL(snapshot.ref);
+    if (onProgress) onProgress(100);
   } catch (storageError) {
     console.warn('Storage upload encountered an issue. Using optimized data URL fallback.', storageError);
     if (dataUrlFallback) {

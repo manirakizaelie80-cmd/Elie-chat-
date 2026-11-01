@@ -31,6 +31,8 @@ interface TopNavProps {
   isMobileSidebarOpen?: boolean;
   notifications?: InAppNotification[];
   onSelectNotification?: (notif: InAppNotification) => void;
+  onOpenAllContacts?: () => void;
+  contactsCount?: number;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({
@@ -47,6 +49,8 @@ export const TopNav: React.FC<TopNavProps> = ({
   isMobileSidebarOpen,
   notifications = [],
   onSelectNotification,
+  onOpenAllContacts,
+  contactsCount,
 }) => {
   const ongoingCallsCount = activeCalls.length;
   const [isNotifOpen, setIsNotifOpen] = useState(false);
@@ -145,6 +149,22 @@ export const TopNav: React.FC<TopNavProps> = ({
           <Users className="w-3.5 h-3.5" />
           <span>Direct (1-on-1)</span>
         </button>
+
+        {onOpenAllContacts && (
+          <button
+            onClick={onOpenAllContacts}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-colors whitespace-nowrap text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800/80 hover:border-slate-700 bg-slate-900/50"
+            title="View all known contacts directory"
+          >
+            <Users className="w-3.5 h-3.5 text-blue-400" />
+            <span>My Contacts</span>
+            {contactsCount !== undefined && contactsCount > 0 && (
+              <span className="px-1.5 py-0.2 text-[10px] font-bold rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                {contactsCount}
+              </span>
+            )}
+          </button>
+        )}
 
         {ongoingCallsCount > 0 && (
           <button

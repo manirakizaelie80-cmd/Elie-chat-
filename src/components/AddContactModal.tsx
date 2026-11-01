@@ -21,6 +21,7 @@ interface AddContactModalProps {
   onClose: () => void;
   currentUser: User;
   onOpenChatWithUser?: (userId: string) => void;
+  onContactRequestSent?: () => void;
 }
 
 export const AddContactModal: React.FC<AddContactModalProps> = ({
@@ -28,6 +29,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
   onClose,
   currentUser,
   onOpenChatWithUser,
+  onContactRequestSent,
 }) => {
   const [queryUsername, setQueryUsername] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -78,6 +80,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
 
       if (result.success) {
         setFeedback({ text: result.message, type: 'success' });
+        if (onContactRequestSent) onContactRequestSent();
       } else {
         setFeedback({ text: result.message, type: 'error' });
       }

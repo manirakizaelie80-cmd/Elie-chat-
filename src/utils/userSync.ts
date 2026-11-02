@@ -46,6 +46,55 @@ export async function saveUserRealtime(user: User, peerId?: string): Promise<voi
   }
 }
 
+/**
+ * Computes a user's live presence status automatically based on their lastActive timestamp.
+ * - < 35s ago: 'online' (active presence)
+ * - 35s - 90s ago: 'away' (idle or tab backgrounded)
+ * - >= 90s ago: 'offline' (timed out or disconnected)
+ * Respects 'in-call' state and user privacy preferences.
+ */
+export function computeUserLiveStatus(
+  user: User,
+  now: number = Date.now()
+): { status: User['status']; isOnline: boolean } {
+  // Check privacy settings
+  if (user.privacySettings?.showOnlineStatus === 'nobody') {
+    return { status: 'offline', isOnline: false };
+  }
+
+  // If currently in a WebRTC call, preserve in-call presence
+  if (user.status === 'in-call') {
+    return { status: 'in-call', isOnline: true };
+  }
+
+  // Explicit user manual status
+  if (user.status === 'offline') {
+    return { status: 'offline', isOnline: false };
+  }
+
+  const lastActive = typeof user.lastActive === 'number' ? user.lastActive : (typeof user.lastSeen === 'number' ? user.lastSeen : 0);
+  if (!lastActive) {
+    return { status: 'offline', isOnline: false };
+  }
+
+  const diffMs = now - lastActive;
+
+  // Active within 35 seconds (heartbeat interval is 15-20s)
+  if (diffMs < 35000) {
+    if (user.status === 'busy') return { status: 'busy', isOnline: true };
+    if (user.status === 'away') return { status: 'away', isOnline: true };
+    return { status: 'online', isOnline: true };
+  }
+
+  // Idle / backgrounded: between 35s and 90s
+  if (diffMs < 90000) {
+    return { status: 'away', isOnline: true };
+  }
+
+  // Inactive / disconnected: past 90 seconds
+  return { status: 'offline', isOnline: false };
+}
+
 export function subscribeUsersRealtime(
   onUsersUpdate: (users: User[]) => void
 ): () => void {
@@ -61,26 +110,13 @@ export function subscribeUsersRealtime(
         snapshot.forEach((docSnap) => {
           const d = docSnap.data();
           if (d && d.id && d.name) {
-            const lastActiveTime = typeof d.lastActive === 'number' ? d.lastActive : 0;
-            const isFresh = now - lastActiveTime < 45000; // Heartbeat window is 20s, threshold 45s
-
-            let computedStatus: User['status'] = 'offline';
-            if (isFresh) {
-              if (d.status === 'in-call') computedStatus = 'in-call';
-              else if (d.status === 'busy') computedStatus = 'busy';
-              else if (d.status === 'away') computedStatus = 'away';
-              else computedStatus = 'online';
-            } else {
-              computedStatus = 'offline';
-            }
-
-            usersList.push({
+            const rawUser: User = {
               id: d.id,
               name: d.name,
               username: d.username,
               avatar: d.avatar || '',
               email: d.email,
-              status: computedStatus,
+              status: d.status || 'online',
               customStatus: d.customStatus,
               location: d.location,
               peerId: d.peerId,
@@ -89,8 +125,15 @@ export function subscribeUsersRealtime(
               privacySettings: d.privacySettings,
               readReceiptsEnabled: d.readReceiptsEnabled,
               createdAt: d.createdAt,
-              lastActive: lastActiveTime,
-              lastSeen: typeof d.lastSeen === 'number' ? d.lastSeen : lastActiveTime,
+              lastActive: typeof d.lastActive === 'number' ? d.lastActive : 0,
+              lastSeen: typeof d.lastSeen === 'number' ? d.lastSeen : (typeof d.lastActive === 'number' ? d.lastActive : 0),
+            };
+
+            const live = computeUserLiveStatus(rawUser, now);
+
+            usersList.push({
+              ...rawUser,
+              status: live.status,
             });
           }
         });
@@ -108,20 +151,27 @@ export function subscribeUsersRealtime(
   }
 }
 
-export function countOnlineUsers(users: User[]): number {
-  // Deduplicate by user.id so multi-tab sessions of the same account are only counted once
+/**
+ * Automatically counts unique online users using live presence verification.
+ */
+export function countOnlineUsers(users: User[], now: number = Date.now()): number {
   const onlineUserIds = new Set<string>();
   for (const u of users) {
-    if (u.status === 'online' || u.status === 'in-call' || u.status === 'busy') {
+    const live = computeUserLiveStatus(u, now);
+    if (live.isOnline) {
       onlineUserIds.add(u.id);
     }
   }
   return onlineUserIds.size;
 }
 
-export function formatLastSeen(lastActiveOrSeen?: number): string {
+/**
+ * Automatically formats dynamic last-seen timestamps that update reactively with live time.
+ */
+export function formatLastSeen(lastActiveOrSeen?: number, now: number = Date.now()): string {
   if (!lastActiveOrSeen) return 'Offline';
-  const diffSec = Math.floor((Date.now() - lastActiveOrSeen) / 1000);
+  const diffSec = Math.max(0, Math.floor((now - lastActiveOrSeen) / 1000));
+  if (diffSec < 20) return 'Active just now';
   if (diffSec < 45) return 'Active now';
   if (diffSec < 60) return 'Last seen just now';
   const diffMin = Math.floor(diffSec / 60);
@@ -130,5 +180,20 @@ export function formatLastSeen(lastActiveOrSeen?: number): string {
   if (diffHours < 24) return `Last seen ${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
   if (diffDays === 1) return 'Last seen yesterday';
-  return `Last seen ${diffDays}d ago`;
+  if (diffDays < 7) return `Last seen ${diffDays}d ago`;
+  return new Date(lastActiveOrSeen).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Formats short relative timestamps for chat previews and message headers.
+ */
+export function formatRelativeTime(timestamp?: number, now: number = Date.now()): string {
+  if (!timestamp) return '';
+  const diff = Math.max(0, now - timestamp);
+  if (diff < 30000) return 'Just now';
+  if (diff < 60000) return '1m';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+  if (diff < 172800000) return '1d';
+  return new Date(timestamp).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
 }

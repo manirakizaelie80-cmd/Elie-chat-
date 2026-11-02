@@ -14,6 +14,7 @@ import {
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { User, ContactRequest, PublicUserProfile, UserPrivacySettings } from '../types';
 import { normalizeUsername } from './auth';
+import { computeUserLiveStatus } from './userSync';
 
 /**
  * Search a user strictly by their exact unique username.
@@ -333,29 +334,22 @@ export function subscribeUserContactsRealtime(
       (snap) => {
         if (snap.exists()) {
           const d = snap.data() as User;
-          const privacy = d.privacySettings;
-          const now = Date.now();
           const lastActiveTime = typeof d.lastActive === 'number' ? d.lastActive : 0;
-          const isFresh = now - lastActiveTime < 45000;
-
-          // Check online status privacy
-          let computedStatus: User['status'] = 'offline';
-          if (privacy?.showOnlineStatus === 'nobody') {
-            computedStatus = 'offline';
-          } else if (isFresh) {
-            computedStatus = d.status || 'online';
-          }
-
-          // Check last seen privacy
           let lastSeenTime = typeof d.lastSeen === 'number' ? d.lastSeen : lastActiveTime;
-          if (privacy?.showLastSeen === 'nobody') {
+          if (d.privacySettings?.showLastSeen === 'nobody') {
             lastSeenTime = 0;
           }
 
-          contactsMap.set(contactId, {
+          const rawUser: User = {
             ...d,
-            status: computedStatus,
+            lastActive: lastActiveTime,
             lastSeen: lastSeenTime,
+          };
+          const live = computeUserLiveStatus(rawUser, Date.now());
+
+          contactsMap.set(contactId, {
+            ...rawUser,
+            status: live.status,
           });
         } else {
           contactsMap.delete(contactId);

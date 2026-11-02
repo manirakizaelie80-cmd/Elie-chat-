@@ -39,6 +39,7 @@ import {
 import { saveRoomRealtime, deleteRoomRealtime, subscribeRoomsRealtime } from './utils/roomSync';
 import { 
   saveMessageRealtime, 
+  updateMessageMediaRealtime,
   subscribeConversationMessages, 
   subscribeAllMessagesRealtime, 
   markMessagesAsDeliveredRealtime,
@@ -474,11 +475,15 @@ export default function App() {
   // Real-Time Firestore Subscription: Channels & Groups
   useEffect(() => {
     const unsubscribe = subscribeRoomsRealtime((firestoreRooms) => {
-      setRooms((prev) => {
-        if (firestoreRooms.length === 0) {
-          DEFAULT_ROOMS.forEach((r) => saveRoomRealtime(r).catch(console.error));
-          return DEFAULT_ROOMS;
+      // Ensure all default rooms are seeded to Firestore
+      const existingIds = new Set(firestoreRooms.map((r) => r.id));
+      DEFAULT_ROOMS.forEach((r) => {
+        if (!existingIds.has(r.id)) {
+          saveRoomRealtime(r).catch(console.error);
         }
+      });
+
+      setRooms(() => {
         const map = new Map<string, Room>();
         DEFAULT_ROOMS.forEach((r) => map.set(r.id, r));
         firestoreRooms.forEach((r) => map.set(r.id, r));
@@ -518,10 +523,11 @@ export default function App() {
     const targetId = isGroup ? activeRoomId : activeDirectUserId;
     if (!targetId) return;
 
-    // Check if group is private and user is unauthorized
+    // Check if group is private and user is unauthorized (allow members and invited users full access to chat history)
     if (isGroup) {
       const room = rooms.find((r) => r.id === targetId);
-      if (room?.isPrivate && !isGroupMember(room, currentUser.id)) {
+      const isInvited = pendingInvitations.some((inv) => inv.groupId === targetId);
+      if (room?.isPrivate && !isGroupMember(room, currentUser.id) && !isInvited) {
         setMessages([]);
         return;
       }
@@ -559,7 +565,7 @@ export default function App() {
     return () => {
       unsubscribe();
     };
-  }, [activeRoomId, activeDirectUserId, currentUser.id, currentUser.readReceiptsEnabled, rooms]);
+  }, [activeRoomId, activeDirectUserId, currentUser.id, currentUser.readReceiptsEnabled, rooms, pendingInvitations]);
 
   // Real-Time Firestore Subscription: Track all messages & unread counts
   useEffect(() => {
@@ -1120,31 +1126,21 @@ export default function App() {
     // Instant local state update (< 0.1ms)
     setMessages((prev) => [...prev, newMsg]);
 
-    if (newMsg.status !== 'sending') {
-      await saveMessageRealtime(newMsg).catch(console.error);
-    }
+    // Permanently save to Firestore so both sender and receiver immediately see the message!
+    await saveMessageRealtime(newMsg).catch(console.error);
 
     return msgId;
   };
 
-  // Update existing optimistic message with uploaded media URL and save to Firestore
+  // Update existing message with uploaded permanent media URL and save to Firestore
   const handleUpdateMessage = async (messageId: string, updates: Partial<Message>) => {
-    setMessages((prev) => {
-      let savedMsg: Message | null = null;
-      const next = prev.map((m) => {
-        if (m.id === messageId) {
-          savedMsg = { ...m, ...updates };
-          return savedMsg;
-        }
-        return m;
-      });
+    // 1. Update local state
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, ...updates } : m))
+    );
 
-      if (savedMsg) {
-        saveMessageRealtime(savedMsg).catch(console.error);
-      }
-
-      return next;
-    });
+    // 2. Permanently persist media updates to Firestore for sender & receiver
+    await updateMessageMediaRealtime(messageId, updates).catch(console.error);
   };
 
   // Send Reaction
@@ -1350,6 +1346,8 @@ export default function App() {
                     )
                   : false
               }
+              pendingInvitation={activeRoomId ? pendingInvitations.find((inv) => inv.groupId === activeRoomId) : undefined}
+              onRespondInvitation={handleRespondInvitation}
             />
           </div>
         )}
@@ -1408,6 +1406,14 @@ export default function App() {
           onUnblockUser={handleUnblockUser}
           onOpenAllContacts={() => setIsAllContactsOpen(true)}
           contactsCount={users.filter((u) => u.id !== currentUser.id).length}
+          rooms={rooms}
+          pendingInvitations={pendingInvitations}
+          onSelectRoom={(roomId) => {
+            setActiveRoomId(roomId);
+            setActiveDirectUserId(null);
+            setMobileScreen('chat');
+            setIsProfileModalOpen(false);
+          }}
           onSave={(updates) => {
             const updated = {
               ...currentUser,
@@ -1437,6 +1443,14 @@ export default function App() {
           currentUser={currentUser}
           contacts={users}
           unreadCounts={unreadCounts}
+          rooms={rooms}
+          pendingInvitations={pendingInvitations}
+          onSelectRoom={(roomId) => {
+            setActiveRoomId(roomId);
+            setActiveDirectUserId(null);
+            setMobileScreen('chat');
+          }}
+          onRespondInvitation={handleRespondInvitation}
           onSelectDirectUser={(userId) => {
             setActiveDirectUserId(userId);
             setActiveRoomId(null);

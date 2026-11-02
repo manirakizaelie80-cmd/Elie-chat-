@@ -18,9 +18,12 @@ import {
   AlertCircle,
   Image as ImageIcon,
   Users,
-  ExternalLink
+  ExternalLink,
+  Hash,
+  Crown,
+  Mail
 } from 'lucide-react';
-import { User, UserLocation, UserPrivacySettings } from '../types';
+import { User, UserLocation, UserPrivacySettings, Room, GroupInvitation } from '../types';
 import { loginWithGoogle, logoutUser, checkUsernameAvailable, validateUsername } from '../utils/auth';
 import { 
   validateImageFile, 
@@ -47,6 +50,9 @@ interface UserProfileModalProps {
   onUnblockUser?: (targetUserId: string) => void;
   onOpenAllContacts?: () => void;
   contactsCount?: number;
+  rooms?: Room[];
+  pendingInvitations?: GroupInvitation[];
+  onSelectRoom?: (roomId: string) => void;
 }
 
 const PRESET_AVATARS = [
@@ -76,12 +82,30 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   onUnblockUser,
   onOpenAllContacts,
   contactsCount,
+  rooms = [],
+  pendingInvitations = [],
+  onSelectRoom,
 }) => {
   const [name, setName] = useState(currentUser.name);
   const [username, setUsername] = useState(currentUser.username || '');
   const [avatar, setAvatar] = useState(currentUser.avatar || DEFAULT_AVATAR);
   const [status, setStatus] = useState<'online' | 'away' | 'busy' | 'offline'>(
     currentUser.status === 'in-call' ? 'online' : (currentUser.status === 'offline' ? 'online' : currentUser.status)
+  );
+
+  // Group classification for user account
+  const myCreatedRooms = rooms.filter((r) => r.createdById === currentUser.id);
+  const myJoinedRooms = rooms.filter(
+    (r) => r.createdById !== currentUser.id && Array.isArray(r.memberIds) && r.memberIds.includes(currentUser.id)
+  );
+  const myInvitedRooms = rooms.filter((r) =>
+    pendingInvitations.some((inv) => inv.groupId === r.id)
+  );
+  const myUserRooms = rooms.filter(
+    (r) =>
+      r.createdById === currentUser.id ||
+      (Array.isArray(r.memberIds) && r.memberIds.includes(currentUser.id)) ||
+      pendingInvitations.some((inv) => inv.groupId === r.id)
   );
   const [customStatus, setCustomStatus] = useState(currentUser.customStatus || '');
   const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(
@@ -644,6 +668,81 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 <span>View All</span>
                 <ExternalLink className="w-3 h-3" />
               </button>
+            )}
+          </div>
+
+          {/* Groups & Channels Overview under Account */}
+          <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+                  <Hash className="w-4 h-4" />
+                </div>
+                <div className="text-left">
+                  <span className="text-xs font-semibold text-slate-200">
+                    My Groups & Channels ({myUserRooms.length})
+                  </span>
+                  <p className="text-[10px] text-slate-400">
+                    {myCreatedRooms.length} Created (Owner) · {myJoinedRooms.length} Joined · {myInvitedRooms.length} Invited
+                  </p>
+                </div>
+              </div>
+              {onOpenAllContacts && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenAllContacts();
+                  }}
+                  className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-colors shrink-0"
+                >
+                  <span>Directory</span>
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {myUserRooms.length > 0 && (
+              <div className="space-y-1 pt-1.5 border-t border-slate-900 max-h-36 overflow-y-auto">
+                {myUserRooms.map((room) => {
+                  const isCreator = room.createdById === currentUser.id;
+                  const isInvited = myInvitedRooms.some((i) => i.id === room.id);
+                  return (
+                    <div
+                      key={room.id}
+                      onClick={() => {
+                        if (onSelectRoom) {
+                          onSelectRoom(room.id);
+                          onClose();
+                        }
+                      }}
+                      className="p-2 rounded-lg bg-slate-900/80 hover:bg-slate-800/80 border border-slate-800/60 flex items-center justify-between gap-2 cursor-pointer transition-colors group"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs">{room.icon || '#'}</span>
+                        <span className="text-xs font-medium text-slate-200 truncate group-hover:text-blue-400">{room.name}</span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {isCreator && (
+                          <span className="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 text-[9px] font-bold border border-purple-500/40 flex items-center gap-0.5">
+                            <Crown className="w-2.5 h-2.5" /> Owner
+                          </span>
+                        )}
+                        {!isCreator && !isInvited && (
+                          <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[9px] font-semibold border border-emerald-500/40">
+                            Member
+                          </span>
+                        )}
+                        {isInvited && (
+                          <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[9px] font-bold border border-amber-500/40 animate-pulse">
+                            Invited
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 

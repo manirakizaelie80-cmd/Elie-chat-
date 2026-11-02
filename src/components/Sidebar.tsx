@@ -20,7 +20,8 @@ import {
   ChevronRight,
   MessageSquare,
   MessageCircle,
-  ExternalLink
+  ExternalLink,
+  Camera
 } from 'lucide-react';
 import { Room, User, ActiveCall, GroupInvitation, ContactRequest, Message } from '../types';
 import { formatLastSeen } from '../utils/userSync';
@@ -118,14 +119,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenProfile,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [groupFilter, setGroupFilter] = useState<'all' | 'created' | 'joined' | 'invited'>('all');
 
   // Filter out current user from direct users
   const otherUsers = users.filter((u) => u.id !== currentUserId);
 
-  const filteredRooms = rooms.filter((r) =>
-    r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r.description && r.description.toLowerCase().includes(searchTerm.toLowerCase()))
+  // Groups created by the current user
+  const myCreatedRooms = rooms.filter((r) => r.createdById === currentUserId);
+
+  // Groups joined by the current user (active member)
+  const myJoinedRooms = rooms.filter(
+    (r) => r.createdById !== currentUserId && (Array.isArray(r.memberIds) && r.memberIds.includes(currentUserId))
   );
+
+  // Groups to which current user has an active invitation
+  const myInvitedRooms = rooms.filter((r) =>
+    pendingInvitations.some((inv) => inv.groupId === r.id)
+  );
+
+  // Active groups for the current user (created + joined + invited)
+  const myActiveRooms = rooms.filter(
+    (r) =>
+      r.createdById === currentUserId ||
+      (Array.isArray(r.memberIds) && r.memberIds.includes(currentUserId)) ||
+      pendingInvitations.some((inv) => inv.groupId === r.id)
+  );
+
+  const filteredRooms = rooms.filter((r) => {
+    const matchesSearch =
+      r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.description && r.description.toLowerCase().includes(searchTerm.toLowerCase()));
+    if (!matchesSearch) return false;
+
+    if (groupFilter === 'created') return r.createdById === currentUserId;
+    if (groupFilter === 'joined') {
+      return (
+        r.createdById !== currentUserId &&
+        Array.isArray(r.memberIds) &&
+        r.memberIds.includes(currentUserId)
+      );
+    }
+    if (groupFilter === 'invited') {
+      return pendingInvitations.some((inv) => inv.groupId === r.id);
+    }
+    return true;
+  });
 
   const filteredUsers = otherUsers.filter((u) =>
     u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -187,7 +225,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer group"
             title="Account profile & settings"
           >
-            <div className="relative shrink-0">
+            <div className="relative shrink-0 group/avatar">
               <img
                 src={currentUser?.avatar || DEFAULT_AVATAR}
                 alt={currentUser?.name || 'User'}
@@ -198,6 +236,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   e.currentTarget.src = DEFAULT_AVATAR;
                 }}
               />
+              <div 
+                className="absolute inset-0 bg-slate-950/60 rounded-full flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity backdrop-blur-[1px]"
+                title="Upload or change account image"
+              >
+                <Camera className="w-3.5 h-3.5 text-white drop-shadow" />
+              </div>
               <span
                 className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-slate-900 ${
                   currentUser?.status === 'online'
@@ -232,24 +276,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Known Contacts Counter & View All Option Button */}
-        <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-1.5">
-            <Users className="w-3.5 h-3.5 text-blue-400" />
-            <span className="text-[11px] font-semibold text-slate-200">
-              {otherUsers.length} Known Contact{otherUsers.length === 1 ? '' : 's'}
-            </span>
+        <div className="mt-2.5 pt-2 border-t border-slate-800/80 space-y-1.5 text-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Users className="w-3.5 h-3.5 text-blue-400" />
+              <span className="text-[11px] font-semibold text-slate-200">
+                {otherUsers.length} Known Contact{otherUsers.length === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            {onOpenAllContacts && (
+              <button
+                onClick={onOpenAllContacts}
+                className="text-[11px] font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-0.5 transition-colors px-2 py-0.5 rounded-md hover:bg-blue-600/15"
+                title="Open full contacts and groups directory"
+              >
+                <span>View all</span>
+                <ChevronRight className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
-          {onOpenAllContacts && (
-            <button
-              onClick={onOpenAllContacts}
-              className="text-[11px] font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-0.5 transition-colors px-2 py-0.5 rounded-md hover:bg-blue-600/15"
-              title="Open full contacts directory"
-            >
-              <span>View all my contacts</span>
-              <ChevronRight className="w-3 h-3" />
-            </button>
-          )}
+          {/* Groups visible under user's account */}
+          <div className="flex items-center justify-between text-[10px] text-slate-400 bg-slate-900/80 rounded-lg px-2 py-1 border border-slate-800/60">
+            <span className="flex items-center gap-1.5 truncate">
+              <span className="text-purple-400 font-semibold">{myCreatedRooms.length} Created</span>
+              <span className="text-slate-600">·</span>
+              <span className="text-blue-400 font-semibold">{myJoinedRooms.length} Joined</span>
+            </span>
+            {myInvitedRooms.length > 0 && (
+              <span className="px-1.5 py-0.2 rounded bg-purple-600/20 text-purple-300 font-bold border border-purple-500/40 animate-pulse">
+                {myInvitedRooms.length} Invited
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -361,17 +421,67 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
 
+          {/* Group Filter Tabs (All / Created / Joined / Invited) */}
+          <div className="flex items-center gap-1 px-1 mb-2 overflow-x-auto no-scrollbar">
+            <button
+              onClick={() => setGroupFilter('all')}
+              className={`px-2 py-0.5 rounded-md text-[10px] font-semibold transition-colors shrink-0 ${
+                groupFilter === 'all'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-800/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              All ({rooms.length})
+            </button>
+            <button
+              onClick={() => setGroupFilter('created')}
+              className={`px-2 py-0.5 rounded-md text-[10px] font-semibold transition-colors shrink-0 flex items-center gap-1 ${
+                groupFilter === 'created'
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-slate-800/80 text-slate-400 hover:text-purple-300 hover:bg-slate-800'
+              }`}
+            >
+              <span>Created</span>
+              <span className="opacity-80">({myCreatedRooms.length})</span>
+            </button>
+            <button
+              onClick={() => setGroupFilter('joined')}
+              className={`px-2 py-0.5 rounded-md text-[10px] font-semibold transition-colors shrink-0 flex items-center gap-1 ${
+                groupFilter === 'joined'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-800/80 text-slate-400 hover:text-emerald-300 hover:bg-slate-800'
+              }`}
+            >
+              <span>Joined</span>
+              <span className="opacity-80">({myJoinedRooms.length})</span>
+            </button>
+            {myInvitedRooms.length > 0 && (
+              <button
+                onClick={() => setGroupFilter('invited')}
+                className={`px-2 py-0.5 rounded-md text-[10px] font-semibold transition-colors shrink-0 flex items-center gap-1 ${
+                  groupFilter === 'invited'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-slate-800/80 text-amber-400 hover:text-amber-200 hover:bg-slate-800 animate-pulse'
+                }`}
+              >
+                <span>Invited</span>
+                <span className="opacity-90">({myInvitedRooms.length})</span>
+              </button>
+            )}
+          </div>
+
           <div className="space-y-0.5">
             {filteredRooms.length === 0 ? (
               <div className="px-2.5 py-3 text-center text-xs text-slate-500">
-                No rooms match search
+                No rooms match filter
               </div>
             ) : (
               filteredRooms.map((room) => {
                 const isSelected = activeRoomId === room.id && activeDirectUserId === null;
                 const hasCall = Boolean(room.activeCall);
                 const isCreator = room.createdById === currentUserId;
-                const isMember = !room.isPrivate || (room.memberIds && room.memberIds.includes(currentUserId));
+                const isMember = !room.isPrivate || (Array.isArray(room.memberIds) && room.memberIds.includes(currentUserId)) || isCreator;
+                const isInvited = pendingInvitations.some((inv) => inv.groupId === room.id);
                 const unread = unreadCounts[`room__${room.id}`] || 0;
 
                 return (
@@ -396,7 +506,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       )}
                       
                       <div className="truncate">
-                        <span className="truncate block">{room.name}</span>
+                        <span className="truncate block font-semibold">{room.name}</span>
                         {room.description && (
                           <span className="text-[10px] text-slate-500 truncate block">
                             {room.description}
@@ -413,16 +523,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         </span>
                       )}
 
-                      {/* Privacy indicator */}
-                      {room.isPrivate && !isMember && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-amber-400 border border-amber-500/30 flex items-center gap-0.5">
-                          <Lock className="w-2.5 h-2.5" /> Request
+                      {/* Creator badge */}
+                      {isCreator && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-500/25 text-purple-300 font-bold border border-purple-500/40">
+                          Owner
                         </span>
                       )}
 
-                      {room.isCustomGroup && (
-                        <span className="text-[9px] px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 font-semibold border border-purple-500/30">
-                          Group
+                      {/* Invited badge */}
+                      {isInvited && !isMember && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/25 text-amber-300 font-bold border border-amber-500/40 animate-pulse">
+                          Invited
+                        </span>
+                      )}
+
+                      {/* Joined member badge */}
+                      {!isCreator && isMember && room.isCustomGroup && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+                          Joined
+                        </span>
+                      )}
+
+                      {/* Privacy indicator for non-members */}
+                      {room.isPrivate && !isMember && !isInvited && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-amber-400 border border-amber-500/30 flex items-center gap-0.5">
+                          <Lock className="w-2.5 h-2.5" /> Request
                         </span>
                       )}
 
@@ -558,6 +683,105 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
         </div>
+
+        {/* Groups in Contacts: Visible for Creator, Joined Members & Invited Peers */}
+        {myActiveRooms.length > 0 && (
+          <div className="pb-2 border-b border-slate-800/80 mb-2">
+            <div className="px-2 mb-1.5 flex items-center justify-between">
+              <span className="text-[11px] font-semibold tracking-wider uppercase text-slate-400 flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-purple-400" />
+                <span>My Groups in Contacts ({myActiveRooms.length})</span>
+              </span>
+              {onOpenAllContacts && (
+                <button
+                  onClick={onOpenAllContacts}
+                  className="text-[10px] text-purple-400 hover:text-purple-300 font-medium"
+                >
+                  Directory
+                </button>
+              )}
+            </div>
+
+            <div className="space-y-0.5">
+              {myActiveRooms.map((room) => {
+                const isSelected = activeRoomId === room.id && activeDirectUserId === null;
+                const isCreator = room.createdById === currentUserId;
+                const isMember = Array.isArray(room.memberIds) && room.memberIds.includes(currentUserId);
+                const invitation = pendingInvitations.find((inv) => inv.groupId === room.id);
+                const isInvited = Boolean(invitation);
+                const unread = unreadCounts[`room__${room.id}`] || 0;
+
+                return (
+                  <div
+                    key={`contact-group-${room.id}`}
+                    onClick={() => handleRoomClick(room)}
+                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-medium cursor-pointer transition-colors group ${
+                      isSelected
+                        ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30'
+                        : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 truncate flex-1 min-w-0 mr-1.5">
+                      <div className="w-8 h-8 rounded-full bg-purple-950/80 border border-purple-500/40 flex items-center justify-center text-purple-300 shrink-0 text-sm">
+                        {room.icon ? (
+                          <span>{room.icon}</span>
+                        ) : room.type === 'voice-video' ? (
+                          <Video className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Hash className="w-4 h-4 text-purple-400" />
+                        )}
+                      </div>
+
+                      <div className="truncate text-left flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="truncate block font-semibold text-slate-200">
+                            {room.name}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate flex items-center gap-1">
+                          {isCreator && (
+                            <span className="text-purple-400 font-semibold flex items-center gap-0.5">
+                              👑 Owner
+                            </span>
+                          )}
+                          {!isCreator && isMember && (
+                            <span className="text-emerald-400 font-medium">
+                              👥 Member ({room.memberIds?.length || 1})
+                            </span>
+                          )}
+                          {isInvited && !isMember && (
+                            <span className="text-amber-400 font-semibold animate-pulse">
+                              📨 Invited · Full chat access
+                            </span>
+                          )}
+                          {room.description && (
+                            <>
+                              <span className="text-slate-600">·</span>
+                              <span className="truncate text-slate-500">{room.description}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {unread > 0 && (
+                        <span className="px-1.5 py-0.2 rounded-full bg-blue-600 text-white text-[10px] font-bold">
+                          {unread}
+                        </span>
+                      )}
+                      {isInvited && !isMember && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold">
+                          Join
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Section 2: Contacts & Private Chats (Private, Authorized-Only Directory) */}
         <div>

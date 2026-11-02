@@ -28,6 +28,7 @@ service cloud.firestore {
         && (!('contacts' in data) || data.contacts is list)
         && (!('blockedUserIds' in data) || data.blockedUserIds is list)
         && (!('privacySettings' in data) || data.privacySettings is map)
+        && (!('location' in data) || data.location is map)
         && (!('lastActive' in data) || data.lastActive is number)
         && (!('lastSeen' in data) || data.lastSeen is number)
         && (!('createdAt' in data) || data.createdAt is number);
@@ -60,15 +61,17 @@ service cloud.firestore {
         && data.senderName is string && data.senderName.size() > 0 && data.senderName.size() <= 100
         && data.timestamp is number
         && (!('isGroup' in data) || data.isGroup is bool)
-        && (!('senderAvatar' in data) || (data.senderAvatar is string && data.senderAvatar.size() <= 1000))
+        && (!('senderAvatar' in data) || (data.senderAvatar is string && data.senderAvatar.size() <= 500000))
         && (!('text' in data) || (data.text is string && data.text.size() <= 5000))
-        && (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 2000))
+        && (!('mediaUrl' in data) || (data.mediaUrl is string && data.mediaUrl.size() <= 1000000))
         && (!('mediaType' in data) || data.mediaType in ['image', 'video', 'file', 'audio'])
         && (!('fileName' in data) || (data.fileName is string && data.fileName.size() <= 256))
         && (!('fileSize' in data) || data.fileSize is number)
-        && (!('voiceAudio' in data) || (data.voiceAudio is string && data.voiceAudio.size() <= 500000))
+        && (!('voiceAudio' in data) || (data.voiceAudio is string && data.voiceAudio.size() <= 1000000))
         && (!('voiceDuration' in data) || data.voiceDuration is number)
         && (!('status' in data) || data.status in ['sent', 'delivered', 'read'])
+        && (!('reactions' in data) || data.reactions is map)
+        && (!('replyTo' in data) || data.replyTo is map)
         && (!('readBy' in data) || data.readBy is list)
         && (!('readAt' in data) || data.readAt is number);
     }
@@ -82,8 +85,10 @@ service cloud.firestore {
         && data.type in ['audio', 'video']
         && data.status in ['calling', 'ringing', 'accepted', 'rejected', 'busy', 'ended']
         && data.createdAt is number
-        && (!('callerAvatar' in data) || (data.callerAvatar is string && data.callerAvatar.size() <= 1000))
+        && (!('callerAvatar' in data) || (data.callerAvatar is string && data.callerAvatar.size() <= 500000))
         && (!('isGroup' in data) || data.isGroup is bool)
+        && (!('offer' in data) || data.offer is map)
+        && (!('answer' in data) || data.answer is map)
         && (!('endedAt' in data) || data.endedAt is number);
     }
 
@@ -189,11 +194,10 @@ service cloud.firestore {
       allow delete: if isValidId(roomId);
     }
 
-    // Real-time persistent messages (private group messages guarded for members only)
+    // Real-time persistent messages (permanent visibility for sender & receiver)
     match /messages/{messageId} {
       allow read: if true;
-      allow create: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId
-        && (!request.resource.data.isGroup || isRoomMember(getRoom(request.resource.data.targetId), request.resource.data.senderId));
+      allow create: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
       allow update: if isValidId(messageId) && isValidMessage(request.resource.data) && request.resource.data.id == messageId;
       allow delete: if isValidId(messageId);
     }

@@ -21,8 +21,14 @@ export async function saveUserRealtime(user: User, peerId?: string): Promise<voi
 
     if (user.avatar) data.avatar = user.avatar;
     if (user.email) data.email = user.email;
+    if (user.username) data.username = user.username;
     if (user.customStatus !== undefined) data.customStatus = user.customStatus;
     if (peerId) data.peerId = peerId;
+    if (Array.isArray(user.contacts)) data.contacts = user.contacts;
+    if (Array.isArray(user.blockedUserIds)) data.blockedUserIds = user.blockedUserIds;
+    if (user.privacySettings) data.privacySettings = user.privacySettings;
+    if (user.readReceiptsEnabled !== undefined) data.readReceiptsEnabled = user.readReceiptsEnabled;
+    if (user.createdAt) data.createdAt = user.createdAt;
     if (user.location) {
       data.location = {
         city: user.location.city,
@@ -71,12 +77,18 @@ export function subscribeUsersRealtime(
             usersList.push({
               id: d.id,
               name: d.name,
+              username: d.username,
               avatar: d.avatar || '',
               email: d.email,
               status: computedStatus,
               customStatus: d.customStatus,
               location: d.location,
               peerId: d.peerId,
+              contacts: Array.isArray(d.contacts) ? d.contacts : [],
+              blockedUserIds: Array.isArray(d.blockedUserIds) ? d.blockedUserIds : [],
+              privacySettings: d.privacySettings,
+              readReceiptsEnabled: d.readReceiptsEnabled,
+              createdAt: d.createdAt,
               lastActive: lastActiveTime,
               lastSeen: typeof d.lastSeen === 'number' ? d.lastSeen : lastActiveTime,
             });

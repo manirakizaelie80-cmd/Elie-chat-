@@ -18,7 +18,10 @@ export async function saveRoomRealtime(room: Room): Promise<void> {
     if (room.category) data.category = room.category;
     if (room.icon) data.icon = room.icon;
     if (room.isCustomGroup !== undefined) data.isCustomGroup = room.isCustomGroup;
+    if (room.isPrivate !== undefined) data.isPrivate = room.isPrivate;
+    if (room.requiresApproval !== undefined) data.requiresApproval = room.requiresApproval;
     if (room.memberIds && Array.isArray(room.memberIds)) data.memberIds = room.memberIds;
+    if (room.adminIds && Array.isArray(room.adminIds)) data.adminIds = room.adminIds;
     if (room.activeCall) data.activeCall = room.activeCall;
 
     await setDoc(doc(db, 'rooms', room.id), data, { merge: true });
@@ -59,7 +62,10 @@ export function subscribeRoomsRealtime(
               category: d.category,
               icon: d.icon,
               isCustomGroup: Boolean(d.isCustomGroup),
+              isPrivate: Boolean(d.isPrivate),
+              requiresApproval: Boolean(d.requiresApproval),
               memberIds: Array.isArray(d.memberIds) ? d.memberIds : [],
+              adminIds: Array.isArray(d.adminIds) ? d.adminIds : [],
               createdAt: typeof d.createdAt === 'number' ? d.createdAt : Date.now(),
               activeCall: d.activeCall,
             });

@@ -33,7 +33,7 @@ import {
   Clock,
   Camera
 } from 'lucide-react';
-import { Message, User, Room } from '../types';
+import { Message, User, Room, GroupInvitation } from '../types';
 import { formatLastSeen } from '../utils/userSync';
 import { DEFAULT_AVATAR } from '../utils/photoUpload';
 import { uploadChatMediaWithHandle, uploadChatMedia, formatBytes, detectMediaType } from '../utils/mediaUpload';
@@ -53,6 +53,7 @@ export interface QueuedMediaItem {
   timeRemainingFormatted?: string;
   uploadedUrl?: string;
   speedMs?: number;
+  dataUrl?: string;
   errorMessage?: string;
   cancelHandle?: () => void;
   filePromise?: Promise<string>;
@@ -87,6 +88,8 @@ interface ChatAreaProps {
   onOpenGroupManagement?: (room: Room, initialTab?: 'details' | 'invite' | 'requests' | 'invitations') => void;
   onRequestJoinGroup?: (room: Room) => void;
   hasPendingJoinRequest?: boolean;
+  pendingInvitation?: GroupInvitation;
+  onRespondInvitation?: (inv: GroupInvitation, accept: boolean) => void;
 }
 
 const COMMON_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🚀', '👀'];
@@ -125,6 +128,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenGroupManagement,
   onRequestJoinGroup,
   hasPendingJoinRequest = false,
+  pendingInvitation,
+  onRespondInvitation,
 }) => {
   const isRoom = Boolean(currentRoom);
   const [inputText, setInputText] = useState('');
@@ -301,14 +306,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   }, [attachedQueue, isPendingAutoSend, onSendMessage]);
 
-  // Helpers to add files to staging queue
+  // Helpers to add files to staging queue with permanent dataUrl preparation
   const addFilesToQueue = (files: File[]) => {
     if (!files || files.length === 0) return;
     const newItems: QueuedMediaItem[] = files.map((file) => {
       const detectedType = detectMediaType(file);
       const instantLocalUrl = URL.createObjectURL(file);
+      const itemId = `upl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+      // Read small files (< 1.5MB) to permanent DataURL in background (< 30ms)
+      if (file.size < 1.5 * 1024 * 1024) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (reader.result) {
+            setAttachedQueue((prev) =>
+              prev.map((it) => (it.id === itemId ? { ...it, dataUrl: reader.result as string } : it))
+            );
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+
       return {
-        id: `upl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        id: itemId,
         file,
         previewUrl: instantLocalUrl,
         type: detectedType,
@@ -388,21 +408,38 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       itemsToDispatch.forEach((item, index) => {
         const optimisticMsgId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
         const isReady = item.status === 'completed' && Boolean(item.uploadedUrl);
+        const permanentMediaUrl = isReady
+          ? item.uploadedUrl
+          : (item.dataUrl || item.previewUrl);
 
-        // Immediate optimistic render in chat stream (0ms latency!)
+        // Immediate optimistic render in chat stream (0ms latency) & permanent Firestore record
         onSendMessage({
           id: optimisticMsgId,
           text: index === 0 ? currentText : '',
-          mediaUrl: isReady ? item.uploadedUrl : item.previewUrl,
+          mediaUrl: permanentMediaUrl,
           mediaType: item.type,
           fileName: item.fileName,
           fileSize: item.fileSize,
           replyTo: index === 0 ? replyContext : undefined,
-          status: isReady ? 'sent' : 'sending',
+          status: 'sent',
         });
 
         // Background persistence listener
         if (!isReady) {
+          // If dataUrl wasn't ready when sent, read and persist it immediately so receiver doesn't wait
+          if (!item.dataUrl && item.file.size < 1.5 * 1024 * 1024) {
+            const immediateReader = new FileReader();
+            immediateReader.onloadend = () => {
+              if (immediateReader.result && onUpdateMessage) {
+                onUpdateMessage(optimisticMsgId, {
+                  mediaUrl: immediateReader.result as string,
+                  status: 'sent',
+                });
+              }
+            };
+            immediateReader.readAsDataURL(item.file);
+          }
+
           const promiseToTrack = item.filePromise || (async () => {
             const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
             const res = await uploadChatMedia({
@@ -564,56 +601,48 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const elapsedMs = performance.now() - recordingStartTimeRef.current;
         const durationSec = Math.max(1, Math.round(elapsedMs / 1000));
 
-        // 1. Instant local object URL (0ms latency!)
-        const localAudioUrl = URL.createObjectURL(audioBlob);
         const optimisticMsgId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
         const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
 
-        // 2. DISPATCH INSTANTLY IN MICROSECONDS TO CHAT FEED!
-        onSendMessage({
-          id: optimisticMsgId,
-          text: '🎤 Voice note',
-          mediaUrl: localAudioUrl,
-          mediaType: 'audio',
-          voiceAudio: localAudioUrl,
-          voiceDuration: durationSec,
-          status: 'sending',
-        });
+        // Read audioBlob directly to permanent DataURL in ~5ms
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const permanentAudioUrl = (reader.result as string) || URL.createObjectURL(audioBlob);
 
-        // 3. High-speed background cloud upload
-        const extension = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
-        const audioFile = new File([audioBlob], `voicenote_${Date.now()}.${extension}`, { type: actualMime });
-
-        try {
-          const res = await uploadChatMedia({
-            file: audioFile,
-            conversationId: convId,
-            userId: currentUser.id,
+          // 1. Dispatch immediately to chat feed & Firestore so both sender & receiver hear it permanently!
+          onSendMessage({
+            id: optimisticMsgId,
+            text: '🎤 Voice note',
+            mediaUrl: permanentAudioUrl,
+            mediaType: 'audio',
+            voiceAudio: permanentAudioUrl,
+            voiceDuration: durationSec,
+            status: 'sent',
           });
 
-          // 4. Update message with permanent Cloud Storage URL
-          if (onUpdateMessage) {
-            onUpdateMessage(optimisticMsgId, {
-              mediaUrl: res.mediaUrl,
-              voiceAudio: res.mediaUrl,
-              status: 'sent',
+          // 2. High-speed background cloud upload to Firebase Storage for CDN URL
+          const extension = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
+          const audioFile = new File([audioBlob], `voicenote_${Date.now()}.${extension}`, { type: actualMime });
+
+          try {
+            const res = await uploadChatMedia({
+              file: audioFile,
+              conversationId: convId,
+              userId: currentUser.id,
             });
-          }
-        } catch (uploadErr) {
-          console.warn('Voice note storage upload fallback to dataURL:', uploadErr);
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const dataUrl = reader.result as string;
-            if (onUpdateMessage) {
+
+            if (res.mediaUrl && onUpdateMessage) {
               onUpdateMessage(optimisticMsgId, {
-                mediaUrl: dataUrl,
-                voiceAudio: dataUrl,
+                mediaUrl: res.mediaUrl,
+                voiceAudio: res.mediaUrl,
                 status: 'sent',
               });
             }
-          };
-          reader.readAsDataURL(audioBlob);
-        }
+          } catch (uploadErr) {
+            console.warn('Voice note CDN upload fallback (already permanent via DataURL):', uploadErr);
+          }
+        };
+        reader.readAsDataURL(audioBlob);
       };
 
       // Start recording with 200ms timeslices for smooth audio collection
@@ -678,6 +707,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     (Array.isArray(currentRoom.memberIds) && currentRoom.memberIds.includes(currentUser.id)) ||
     (Array.isArray(currentRoom.adminIds) && currentRoom.adminIds.includes(currentUser.id))
   );
+  const isInvited = Boolean(pendingInvitation);
+  const canAccessHistory = isRoomMember || isInvited;
   const targetTitle = isRoom ? currentRoom?.name : directUser?.name;
 
   return (
@@ -913,9 +944,41 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       </div>
 
+      {/* Top Banner when viewing as an invited user */}
+      {isRoom && !isRoomMember && isInvited && pendingInvitation && onRespondInvitation && (
+        <div className="bg-purple-950/80 border-b border-purple-500/40 p-2.5 px-4 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs z-10 shrink-0">
+          <div className="flex items-center gap-2.5 text-purple-200 min-w-0">
+            <span className="text-lg shrink-0">📨</span>
+            <div className="min-w-0">
+              <p className="font-semibold text-white truncate">
+                Invited to "{currentRoom?.name}" by {pendingInvitation.inviterName}
+              </p>
+              <p className="text-[11px] text-purple-300">
+                You can review all previous messages below. Accept the invitation to join and chat.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => onRespondInvitation(pendingInvitation, false)}
+              className="px-3 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg font-medium transition-colors"
+            >
+              Decline
+            </button>
+            <button
+              onClick={() => onRespondInvitation(pendingInvitation, true)}
+              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold shadow-md transition-all flex items-center gap-1.5"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Accept & Join</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Message Feed / Private Lock Screen */}
       <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3.5">
-        {isRoom && !isRoomMember ? (
+        {isRoom && !canAccessHistory ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4 my-auto">
             <div className="w-16 h-16 rounded-2xl bg-purple-950/40 border border-purple-500/30 flex items-center justify-center text-purple-400 shadow-xl">
               <Lock className="w-8 h-8" />
@@ -1066,9 +1129,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                             <img
                               src={msg.mediaUrl}
                               alt={msg.fileName || 'Attachment'}
-                              className="max-h-64 rounded-xl object-cover w-full hover:opacity-95 transition-opacity cursor-pointer shadow-md"
+                              loading="lazy"
+                              className="max-h-72 rounded-xl object-cover w-full hover:opacity-95 transition-opacity cursor-pointer shadow-md"
                               onClick={() => setPreviewImageUrl(msg.mediaUrl!)}
                             />
+                            <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <a
+                                href={msg.mediaUrl}
+                                download={msg.fileName || `photo_${msg.id}.jpg`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white shadow-md backdrop-blur-sm transition-colors"
+                                title="Download image"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </a>
+                            </div>
                             {msg.status === 'sending' && (
                               <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-[1px] flex items-center justify-center">
                                 <div className="bg-slate-900/90 border border-slate-700/80 rounded-full px-2.5 py-1 text-[11px] font-medium text-blue-300 flex items-center gap-1.5 shadow-lg">
@@ -1613,6 +1690,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           )}
         </>
+      )}
+
+      {/* If invited to this private group, prompt to accept at the bottom to start chatting */}
+      {isRoom && !isRoomMember && isInvited && pendingInvitation && onRespondInvitation && (
+        <div className="p-3 bg-slate-900 border-t border-purple-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-slate-300">
+            <Lock className="w-4 h-4 text-purple-400 shrink-0" />
+            <span>You are viewing past chat history. Accept the invitation to send messages and make calls.</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => onRespondInvitation(pendingInvitation, false)}
+              className="px-3 py-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg font-medium transition-colors"
+            >
+              Decline
+            </button>
+            <button
+              onClick={() => onRespondInvitation(pendingInvitation, true)}
+              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold shadow-md transition-all flex items-center gap-1.5"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Accept & Join</span>
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

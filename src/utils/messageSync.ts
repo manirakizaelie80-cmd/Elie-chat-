@@ -7,6 +7,7 @@ import {
   onSnapshot, 
   query, 
   where, 
+  orderBy,
   limit, 
   arrayUnion 
 } from 'firebase/firestore';
@@ -30,7 +31,7 @@ export async function saveMessageRealtime(message: Message): Promise<void> {
       isGroup: Boolean(message.isGroup),
       senderId: message.senderId,
       senderName: message.senderName,
-      status: message.status || 'sent',
+      status: (message.status === 'sending' ? 'sent' : message.status) || 'sent',
       timestamp: message.timestamp || Date.now(),
     };
 
@@ -47,7 +48,7 @@ export async function saveMessageRealtime(message: Message): Promise<void> {
     if (message.readBy) data.readBy = message.readBy;
     if (message.readAt) data.readAt = message.readAt;
 
-    await setDoc(doc(db, 'messages', message.id), data);
+    await setDoc(doc(db, 'messages', message.id), data, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -83,6 +84,8 @@ export function subscribeConversationMessages(
               text: d.text || '',
               mediaUrl: d.mediaUrl,
               mediaType: d.mediaType,
+              fileName: d.fileName,
+              fileSize: typeof d.fileSize === 'number' ? d.fileSize : undefined,
               voiceAudio: d.voiceAudio,
               voiceDuration: d.voiceDuration,
               reactions: d.reactions || {},
@@ -118,6 +121,7 @@ export function subscribeAllMessagesRealtime(
   try {
     const q = query(
       collection(db, path),
+      orderBy('timestamp', 'desc'),
       limit(300)
     );
 
@@ -139,6 +143,8 @@ export function subscribeAllMessagesRealtime(
               text: d.text || '',
               mediaUrl: d.mediaUrl,
               mediaType: d.mediaType,
+              fileName: d.fileName,
+              fileSize: typeof d.fileSize === 'number' ? d.fileSize : undefined,
               voiceAudio: d.voiceAudio,
               voiceDuration: d.voiceDuration,
               reactions: d.reactions || {},
@@ -225,6 +231,35 @@ export async function updateMessageReactionsRealtime(
     await updateDoc(doc(db, 'messages', messageId), {
       reactions,
     });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateMessageMediaRealtime(
+  messageId: string,
+  updates: {
+    mediaUrl?: string;
+    mediaType?: 'image' | 'video' | 'file' | 'audio';
+    fileName?: string;
+    fileSize?: number;
+    voiceAudio?: string;
+    voiceDuration?: number;
+    status?: 'sending' | 'sent' | 'delivered' | 'read';
+  }
+): Promise<void> {
+  const path = `messages/${messageId}`;
+  try {
+    const clean: Record<string, any> = {};
+    if (updates.mediaUrl) clean.mediaUrl = updates.mediaUrl;
+    if (updates.mediaType) clean.mediaType = updates.mediaType;
+    if (updates.fileName) clean.fileName = updates.fileName;
+    if (updates.fileSize !== undefined) clean.fileSize = updates.fileSize;
+    if (updates.voiceAudio) clean.voiceAudio = updates.voiceAudio;
+    if (updates.voiceDuration !== undefined) clean.voiceDuration = updates.voiceDuration;
+    clean.status = updates.status === 'sending' ? 'sent' : (updates.status || 'sent');
+
+    await setDoc(doc(db, 'messages', messageId), clean, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }

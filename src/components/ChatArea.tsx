@@ -402,77 +402,36 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     onSendTyping(false);
 
     if (hasAttachments) {
+      const allCompleted = attachedQueue.every((item) => item.status === 'completed' && Boolean(item.uploadedUrl));
+
+      if (!allCompleted) {
+        // Queue message to automatically dispatch the instant all attachments finish uploading
+        pendingSendRef.current = {
+          text: currentText,
+          replyTo: replyContext,
+        };
+        setIsPendingAutoSend(true);
+        return;
+      }
+
+      // If all attachments are already completed, dispatch immediately with permanent Storage URLs!
       const itemsToDispatch = [...attachedQueue];
-      setAttachedQueue([]); // Clear queue immediately so user is totally unblocked
+      setAttachedQueue([]);
+      setIsPendingAutoSend(false);
+      pendingSendRef.current = null;
 
       itemsToDispatch.forEach((item, index) => {
         const optimisticMsgId = `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-        const isReady = item.status === 'completed' && Boolean(item.uploadedUrl);
-        const permanentMediaUrl = isReady
-          ? item.uploadedUrl
-          : (item.dataUrl || item.previewUrl);
-
-        // Immediate optimistic render in chat stream (0ms latency) & permanent Firestore record
         onSendMessage({
           id: optimisticMsgId,
           text: index === 0 ? currentText : '',
-          mediaUrl: permanentMediaUrl,
+          mediaUrl: item.uploadedUrl,
           mediaType: item.type,
           fileName: item.fileName,
           fileSize: item.fileSize,
           replyTo: index === 0 ? replyContext : undefined,
           status: 'sent',
         });
-
-        // Background persistence listener
-        if (!isReady) {
-          // If dataUrl wasn't ready when sent, read and persist it immediately so receiver doesn't wait
-          if (!item.dataUrl && item.file.size < 1.5 * 1024 * 1024) {
-            const immediateReader = new FileReader();
-            immediateReader.onloadend = () => {
-              if (immediateReader.result && onUpdateMessage) {
-                onUpdateMessage(optimisticMsgId, {
-                  mediaUrl: immediateReader.result as string,
-                  status: 'sent',
-                });
-              }
-            };
-            immediateReader.readAsDataURL(item.file);
-          }
-
-          const promiseToTrack = item.filePromise || (async () => {
-            const convId = isRoom ? `room__${currentRoom?.id}` : getConversationId(currentUser.id, directUser?.id || '', false);
-            const res = await uploadChatMedia({
-              file: item.file,
-              conversationId: convId,
-              userId: currentUser.id,
-            });
-            return res.mediaUrl;
-          })();
-
-          promiseToTrack
-            .then((remoteUrl) => {
-              if (onUpdateMessage) {
-                onUpdateMessage(optimisticMsgId, {
-                  mediaUrl: remoteUrl,
-                  status: 'sent',
-                });
-              }
-            })
-            .catch((err) => {
-              console.warn('Background media sync fallback to DataURL:', err);
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                if (onUpdateMessage) {
-                  onUpdateMessage(optimisticMsgId, {
-                    mediaUrl: reader.result as string,
-                    status: 'sent',
-                  });
-                }
-              };
-              reader.readAsDataURL(item.file);
-            });
-        }
       });
     } else if (hasText) {
       onSendMessage({
@@ -970,7 +929,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold shadow-md transition-all flex items-center gap-1.5"
             >
               <Check className="w-3.5 h-3.5" />
-              <span>Accept & Join</span>
+              <span>Approve & Join</span>
             </button>
           </div>
         </div>

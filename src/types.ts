@@ -46,6 +46,18 @@ export interface ContactRequest {
   respondedAt?: number;
 }
 
+export interface Contact {
+  id: string; // userId_contactId
+  userId: string;
+  contactId: string;
+  contactName?: string;
+  contactUsername?: string;
+  contactAvatar?: string;
+  status: 'active' | 'blocked';
+  createdAt: number;
+  updatedAt?: number;
+}
+
 export interface PublicUserProfile {
   id: string;
   name: string;

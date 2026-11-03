@@ -24,8 +24,8 @@ export async function saveUserRealtime(user: User, peerId?: string): Promise<voi
     if (user.username) data.username = user.username;
     if (user.customStatus !== undefined) data.customStatus = user.customStatus;
     if (peerId) data.peerId = peerId;
-    if (Array.isArray(user.contacts)) data.contacts = user.contacts;
-    if (Array.isArray(user.blockedUserIds)) data.blockedUserIds = user.blockedUserIds;
+    if (Array.isArray(user.contacts) && user.contacts.length > 0) data.contacts = user.contacts;
+    if (Array.isArray(user.blockedUserIds) && user.blockedUserIds.length > 0) data.blockedUserIds = user.blockedUserIds;
     if (user.privacySettings) data.privacySettings = user.privacySettings;
     if (user.readReceiptsEnabled !== undefined) data.readReceiptsEnabled = user.readReceiptsEnabled;
     if (user.createdAt) data.createdAt = user.createdAt;

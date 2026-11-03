@@ -59,6 +59,7 @@ import {
 import { 
   subscribeUserInvitations, 
   respondToInvitation, 
+  sendGroupInvitation,
   createJoinRequest,
   subscribeUserJoinRequests,
   isGroupMember
@@ -260,6 +261,15 @@ export default function App() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
 
+  // Live Real-Time Timestamp & Presence Ticker (every 2.5s)
+  const [liveNow, setLiveNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLiveNow(Date.now());
+    }, 2500);
+    return () => clearInterval(timer);
+  }, []);
+
   // Navigation State & Mobile Separate Views State (Requirement 2)
   const [activeTab, setActiveTab] = useState<ViewTab>('chats');
   const [activeRoomId, setActiveRoomId] = useState<string | null>('global-connect');
@@ -444,7 +454,7 @@ export default function App() {
   // Real-Time Firestore Presence & Contacts Subscription: Only approved contacts are loaded (Zero-Public-Discovery)
   useEffect(() => {
     const contactIds = currentUser.contacts || [];
-    const unsubscribe = subscribeUserContactsRealtime(currentUser.id, contactIds, (approvedContacts) => {
+    const unsubscribe = subscribeUserContactsRealtime(currentUser.id, contactIds, (approvedContacts: User[]) => {
       setUsers(() => {
         const map = new Map<string, User>();
         map.set(currentUser.id, currentUser);
@@ -994,17 +1004,21 @@ export default function App() {
     category?: string;
     memberIds?: string[];
   }) => {
+    const isCustom = roomData.isCustomGroup;
+    const isPrivate = isCustom ? (roomData.isPrivate ?? true) : false;
+    const requiresApproval = isCustom ? (roomData.requiresApproval ?? true) : false;
+
     const newRoom: Room = {
       id: `room-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       name: roomData.name,
       description: roomData.description,
       type: roomData.type,
-      isCustomGroup: roomData.isCustomGroup,
-      isPrivate: roomData.isPrivate,
-      requiresApproval: roomData.requiresApproval,
-      icon: roomData.icon,
-      category: roomData.category,
-      memberIds: roomData.memberIds,
+      isCustomGroup: isCustom,
+      isPrivate,
+      requiresApproval,
+      icon: roomData.icon || (isCustom ? '👥' : '💬'),
+      category: roomData.category || 'Community',
+      memberIds: [currentUser.id], // Creator is the initial confirmed member; others must accept invitations
       adminIds: [currentUser.id],
       createdById: currentUser.id,
       createdByName: currentUser.name,
@@ -1017,6 +1031,21 @@ export default function App() {
     setMobileScreen('chat');
 
     await saveRoomRealtime(newRoom).catch(console.error);
+
+    // If other peers were selected in the creation modal, send formal invitations to them
+    if (isCustom && roomData.memberIds && roomData.memberIds.length > 0) {
+      const inviteeIds = roomData.memberIds.filter((id) => id !== currentUser.id);
+      for (const inviteeId of inviteeIds) {
+        const inviteeUser = users.find((u) => u.id === inviteeId);
+        if (inviteeUser) {
+          sendGroupInvitation({
+            group: newRoom,
+            inviter: currentUser,
+            invitee: inviteeUser,
+          }).catch(console.error);
+        }
+      }
+    }
   };
 
   // Delete Room
@@ -1218,7 +1247,7 @@ export default function App() {
     (t) => t.targetId === (activeDirectUserId || activeRoomId)
   );
 
-  const realOnlineCount = countOnlineUsers(users);
+  const realOnlineCount = useMemo(() => countOnlineUsers(users, liveNow), [users, liveNow]);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 font-sans text-slate-100 antialiased">

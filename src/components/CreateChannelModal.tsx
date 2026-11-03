@@ -34,8 +34,8 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
   const [description, setDescription] = useState('');
   const [selectedIcon, setSelectedIcon] = useState('💬');
   const [category, setCategory] = useState('Community');
-  const [isPrivate, setIsPrivate] = useState(false);
-  const [requiresApproval, setRequiresApproval] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(true);
+  const [requiresApproval, setRequiresApproval] = useState(true);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
 
   const otherUsers = availableUsers.filter((u) => u.id !== currentUserId);

@@ -338,13 +338,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex items-center gap-1 shrink-0">
                   <button
                     onClick={() => onRespondInvitation(inv, true)}
-                    className="p-1 px-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-[10px] font-semibold transition-colors"
+                    className="p-1 px-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                    title="Approve and join group"
                   >
-                    Accept
+                    <Check className="w-2.5 h-2.5" /> Approve
                   </button>
                   <button
                     onClick={() => onRespondInvitation(inv, false)}
                     className="p-1 px-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg text-[10px] transition-colors"
+                    title="Decline"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -859,10 +861,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => onAcceptContactRequest(req)}
-                        className="p-1 px-2 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-semibold flex items-center gap-1 transition-colors"
-                        title="Accept connection"
+                        className="p-1 px-2.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-semibold flex items-center gap-1 transition-colors"
+                        title="Approve contact connection"
                       >
-                        <Check className="w-2.5 h-2.5" /> Accept
+                        <Check className="w-2.5 h-2.5" /> Approve
                       </button>
                       <button
                         onClick={() => onRejectContactRequest(req.id)}

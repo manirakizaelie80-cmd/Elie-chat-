@@ -451,6 +451,51 @@
         "respondedAt": { "type": "number" }
       },
       "required": ["id", "senderId", "senderName", "senderUsername", "receiverId", "receiverUsername", "status", "createdAt"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "Permanent contact relationship between two registered users in Elie Chat.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique contact relationship ID (e.g. userId_contactId)",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "description": "The user who owns this contact entry",
+          "maxLength": 128
+        },
+        "contactId": {
+          "type": "string",
+          "description": "The target contact user ID",
+          "maxLength": 128
+        },
+        "contactName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "contactUsername": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "contactAvatar": {
+          "type": "string",
+          "maxLength": 500000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "blocked"]
+        },
+        "createdAt": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "userId", "contactId", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -461,6 +506,10 @@
     "/usernames/{username}": {
       "schema": "Username",
       "description": "Atomic reservation directory for unique usernames."
+    },
+    "/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "Stores permanent bilateral contact relationships for users."
     },
     "/rooms/{roomId}": {
       "schema": "Room",

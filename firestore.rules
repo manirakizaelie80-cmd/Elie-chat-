@@ -137,6 +137,19 @@ service cloud.firestore {
         && (!('respondedAt' in data) || data.respondedAt is number);
     }
 
+    function isValidContact(data) {
+      return data.keys().hasAll(['id', 'userId', 'contactId', 'status', 'createdAt'])
+        && data.id is string && data.id.size() <= 128
+        && data.userId is string && data.userId.size() <= 128
+        && data.contactId is string && data.contactId.size() <= 128
+        && data.status in ['active', 'blocked']
+        && data.createdAt is number
+        && (!('contactName' in data) || (data.contactName is string && data.contactName.size() <= 100))
+        && (!('contactUsername' in data) || (data.contactUsername is string && data.contactUsername.size() <= 50))
+        && (!('contactAvatar' in data) || (data.contactAvatar is string && data.contactAvatar.size() <= 500000))
+        && (!('updatedAt' in data) || data.updatedAt is number);
+    }
+
     function isValidNotification(data) {
       return data.keys().hasAll(['id', 'recipientId', 'type', 'title', 'message', 'read', 'createdAt'])
         && data.id is string && data.id.size() <= 128
@@ -183,6 +196,16 @@ service cloud.firestore {
         && request.resource.data.uid is string;
       allow update: if false;
       allow delete: if false;
+    }
+
+    // Permanent bilateral contact connections
+    match /contacts/{contactId} {
+      allow read: if true;
+      allow create: if isValidId(contactId) && isValidContact(request.resource.data) && request.resource.data.id == contactId;
+      allow update: if isValidId(contactId) && isValidContact(request.resource.data) && request.resource.data.id == contactId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.contactId == resource.data.contactId;
+      allow delete: if isValidId(contactId);
     }
 
     // Channels and groups

@@ -355,10 +355,10 @@ export function uploadChatMediaWithHandle(params: {
   const promise = (async (): Promise<ChatMediaUploadResult> => {
     const startTime = performance.now();
     const mediaType = detectMediaType(rawFile);
-    const maxBytes = 50 * 1024 * 1024; // 50MB max limit
+    const maxBytes = 100 * 1024 * 1024; // 100MB max limit for videos and attachments
 
     if (rawFile.size > maxBytes) {
-      throw new Error(`File is too large (${formatBytes(rawFile.size)}). Maximum upload size is 50MB.`);
+      throw new Error(`File is too large (${formatBytes(rawFile.size)}). Maximum upload size is 100MB.`);
     }
 
     // 1. Instant client-side compression for images (<60ms)
@@ -368,7 +368,7 @@ export function uploadChatMediaWithHandle(params: {
 
     if (mediaType === 'image') {
       try {
-        const optimized = await fastCompressImage(rawFile, 1600, 0.82);
+        const optimized = await fastCompressImage(rawFile, 1600, 0.85);
         fileToUpload = optimized.file;
         originalSize = optimized.originalSize;
       } catch (e) {
@@ -405,10 +405,10 @@ export function uploadChatMediaWithHandle(params: {
 
     let downloadUrl = '';
 
-    // FAST-PATH: If file is <= 2.5MB, use direct single-roundtrip uploadBytes!
-    // This eliminates 3 separate HTTP round-trips from resumable upload sessions,
-    // reducing upload time from 2.5s down to 300ms–800ms!
-    const useFastDirectUpload = totalBytes <= 2.5 * 1024 * 1024;
+    // FAST-PATH: If file is an image/file <= 2.5MB, use direct single-roundtrip uploadBytes!
+    // For videos, ALWAYS use uploadBytesResumable for reliable streaming chunks and retry
+    const isVideo = mediaType === 'video';
+    const useFastDirectUpload = !isVideo && totalBytes <= 2.5 * 1024 * 1024;
 
     let attempts = 0;
     while (attempts <= maxRetries) {
@@ -518,9 +518,9 @@ export function uploadChatMediaWithHandle(params: {
 
         console.warn(`Upload attempt ${attempts} failed:`, err);
         if (attempts > maxRetries) {
-          // Final fallback to client-side data URL for small files if Firebase is unreachable
-          if (fileToUpload.size < 2.5 * 1024 * 1024) {
-            console.warn('Falling back to local DataURL transport...');
+          // Emergency fallback strictly for tiny image previews under 300KB if Firebase is unreachable
+          if (mediaType === 'image' && fileToUpload.size < 300 * 1024) {
+            console.warn('Falling back to local DataURL transport for small image...');
             downloadUrl = await new Promise<string>((resolve, reject) => {
               const reader = new FileReader();
               reader.onload = () => resolve(reader.result as string);

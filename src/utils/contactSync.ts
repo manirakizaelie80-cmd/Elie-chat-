@@ -6,13 +6,13 @@ import {
   updateDoc, 
   onSnapshot, 
   query, 
-  where,
-  arrayUnion,
-  arrayRemove,
-  deleteDoc
+  where, 
+  arrayUnion, 
+  arrayRemove, 
+  deleteDoc 
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
-import { User, ContactRequest, PublicUserProfile, UserPrivacySettings } from '../types';
+import { User, ContactRequest, PublicUserProfile, UserPrivacySettings, Contact } from '../types';
 import { normalizeUsername } from './auth';
 import { computeUserLiveStatus } from './userSync';
 
@@ -146,7 +146,7 @@ export function subscribeIncomingContactRequests(
       snapshot.forEach((snap) => {
         list.push(snap.data() as ContactRequest);
       });
-      onUpdate(list.sort((a, b) => b.createdAt - a.createdAt));
+      onUpdate(list);
     },
     (err) => {
       console.warn('Error subscribing to incoming contact requests:', err);
@@ -184,18 +184,47 @@ export function subscribeSentContactRequests(
 
 /**
  * Accept an incoming contact request.
- * Updates request status to 'accepted', and updates both users' contacts lists.
+ * Creates PERMANENT bilateral database records in Firestore /contacts collection
+ * so contacts NEVER disappear after logout, refresh, or session restart.
  */
 export async function acceptContactRequest(request: ContactRequest): Promise<void> {
   const requestRef = doc(db, 'contact_requests', request.id);
+  const now = Date.now();
 
   try {
     await updateDoc(requestRef, {
       status: 'accepted',
-      respondedAt: Date.now(),
+      respondedAt: now,
     });
 
-    // Add each other to contacts
+    // 1. Permanent contact document for receiver (receiver owns contact sender)
+    const receiverContactId = `${request.receiverId}_${request.senderId}`;
+    await setDoc(doc(db, 'contacts', receiverContactId), {
+      id: receiverContactId,
+      userId: request.receiverId,
+      contactId: request.senderId,
+      contactName: request.senderName,
+      contactUsername: request.senderUsername || '',
+      contactAvatar: request.senderAvatar || '',
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    }, { merge: true });
+
+    // 2. Permanent contact document for sender (sender owns contact receiver)
+    const senderContactId = `${request.senderId}_${request.receiverId}`;
+    await setDoc(doc(db, 'contacts', senderContactId), {
+      id: senderContactId,
+      userId: request.senderId,
+      contactId: request.receiverId,
+      contactName: request.receiverUsername || 'User',
+      contactUsername: request.receiverUsername || '',
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    }, { merge: true });
+
+    // 3. Dual update in users collection for array compatibility
     const receiverRef = doc(db, 'users', request.receiverId);
     const senderRef = doc(db, 'users', request.senderId);
 
@@ -207,7 +236,7 @@ export async function acceptContactRequest(request: ContactRequest): Promise<voi
       contacts: arrayUnion(request.receiverId),
     }).catch(console.error);
 
-    // Notify sender that their request was accepted
+    // 4. Notify sender that their request was accepted
     const notifId = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     await setDoc(doc(db, 'notifications', notifId), {
       id: notifId,
@@ -242,16 +271,20 @@ export async function rejectContactRequest(requestId: string): Promise<void> {
 }
 
 /**
- * Remove an existing contact from a user's contact list.
+ * Remove an existing contact from a user's permanent contact list.
  */
 export async function removeContact(currentUserId: string, contactId: string): Promise<void> {
   try {
+    // Delete permanent contact records from Firestore /contacts collection
+    await deleteDoc(doc(db, 'contacts', `${currentUserId}_${contactId}`)).catch(console.error);
+    await deleteDoc(doc(db, 'contacts', `${contactId}_${currentUserId}`)).catch(console.error);
+
+    // Update user document arrays
     const userRef = doc(db, 'users', currentUserId);
     await updateDoc(userRef, {
       contacts: arrayRemove(contactId),
     });
 
-    // Also remove from other user's list
     const otherRef = doc(db, 'users', contactId);
     await updateDoc(otherRef, {
       contacts: arrayRemove(currentUserId),
@@ -267,6 +300,9 @@ export async function removeContact(currentUserId: string, contactId: string): P
  */
 export async function blockUser(currentUserId: string, targetUserId: string): Promise<void> {
   try {
+    await deleteDoc(doc(db, 'contacts', `${currentUserId}_${targetUserId}`)).catch(console.error);
+    await deleteDoc(doc(db, 'contacts', `${targetUserId}_${currentUserId}`)).catch(console.error);
+
     const userRef = doc(db, 'users', currentUserId);
     await updateDoc(userRef, {
       blockedUserIds: arrayUnion(targetUserId),
@@ -309,25 +345,47 @@ export async function updatePrivacySettings(
 }
 
 /**
- * Subscribe exclusively to a user's accepted contacts.
- * Instead of fetching all registered users, this fetches ONLY authorized contacts.
- * Respects online status & last seen privacy preferences!
+ * Subscribe permanently to a user's approved contacts.
+ * Listens directly to Firestore permanent /contacts collection for the given userId.
+ * Automatically backfills and synchronizes contacts from user.contacts legacy array.
+ * Subscribes to each contact user's real-time presence, photo, and profile updates.
  */
 export function subscribeUserContactsRealtime(
   currentUserId: string,
-  contactIds: string[],
-  onUpdate: (contacts: User[]) => void
+  callback: (contacts: User[]) => void
+): () => void;
+export function subscribeUserContactsRealtime(
+  currentUserId: string,
+  legacyContactIds: string[],
+  callback: (contacts: User[]) => void
+): () => void;
+export function subscribeUserContactsRealtime(
+  currentUserId: string,
+  arg2: string[] | ((contacts: User[]) => void),
+  arg3?: (contacts: User[]) => void
 ): () => void {
-  if (!contactIds || contactIds.length === 0) {
-    onUpdate([]);
+  const onUpdate: (contacts: User[]) => void = typeof arg3 === 'function' ? arg3 : (typeof arg2 === 'function' ? arg2 : () => {});
+  const legacyContactIds: string[] = Array.isArray(arg2) ? arg2 : [];
+
+  if (!currentUserId) {
+    if (typeof onUpdate === 'function') onUpdate([]);
     return () => {};
   }
 
-  // Subscribe to individual contact documents
-  const unsubscribers: (() => void)[] = [];
+  const contactUserUnsubs = new Map<string, () => void>();
   const contactsMap = new Map<string, User>();
+  const activeContactIds = new Set<string>();
 
-  contactIds.forEach((contactId) => {
+  const emitContacts = () => {
+    if (typeof onUpdate === 'function') {
+      const list = Array.from(contactsMap.values());
+      onUpdate(list);
+    }
+  };
+
+  const syncContactUserDoc = (contactId: string) => {
+    if (contactUserUnsubs.has(contactId) || contactId === currentUserId) return;
+
     const contactRef = doc(db, 'users', contactId);
     const unsub = onSnapshot(
       contactRef,
@@ -354,16 +412,102 @@ export function subscribeUserContactsRealtime(
         } else {
           contactsMap.delete(contactId);
         }
-        onUpdate(Array.from(contactsMap.values()));
+        emitContacts();
       },
       (err) => {
-        console.warn(`Error subscribing to contact ${contactId}:`, err);
+        console.warn(`Error subscribing to contact profile ${contactId}:`, err);
       }
     );
-    unsubscribers.push(unsub);
+
+    contactUserUnsubs.set(contactId, unsub);
+  };
+
+  // 1. Permanent Firestore /contacts collection subscription
+  const contactsQuery = query(
+    collection(db, 'contacts'),
+    where('userId', '==', currentUserId),
+    where('status', '==', 'active')
+  );
+
+  const unsubContactsColl = onSnapshot(
+    contactsQuery,
+    (snapshot) => {
+      const currentIds = new Set<string>();
+      snapshot.forEach((snap) => {
+        const c = snap.data() as Contact;
+        if (c.contactId && c.contactId !== currentUserId) {
+          currentIds.add(c.contactId);
+          activeContactIds.add(c.contactId);
+          syncContactUserDoc(c.contactId);
+        }
+      });
+
+      // Remove any contacts that were deleted
+      for (const [id, unsub] of contactUserUnsubs.entries()) {
+        if (!currentIds.has(id) && !legacyContactIds.includes(id)) {
+          unsub();
+          contactUserUnsubs.delete(id);
+          contactsMap.delete(id);
+        }
+      }
+
+      emitContacts();
+    },
+    (err) => {
+      console.warn('Error subscribing to permanent contacts collection:', err);
+    }
+  );
+
+  // 2. Also listen to user's profile document to auto-migrate any legacy contacts array
+  const userDocRef = doc(db, 'users', currentUserId);
+  const unsubUserDoc = onSnapshot(
+    userDocRef,
+    (snap) => {
+      if (snap.exists()) {
+        const userData = snap.data() as User;
+        const arrayContacts = userData.contacts || [];
+
+        arrayContacts.forEach((contactId) => {
+          if (contactId && contactId !== currentUserId) {
+            syncContactUserDoc(contactId);
+
+            // Auto-backfill permanent document in /contacts if not present
+            const permanentId = `${currentUserId}_${contactId}`;
+            getDoc(doc(db, 'contacts', permanentId)).then((permSnap) => {
+              if (!permSnap.exists()) {
+                setDoc(doc(db, 'contacts', permanentId), {
+                  id: permanentId,
+                  userId: currentUserId,
+                  contactId,
+                  status: 'active',
+                  createdAt: Date.now(),
+                  updatedAt: Date.now(),
+                }, { merge: true }).catch(() => {});
+              }
+            }).catch(() => {});
+          }
+        });
+      }
+    },
+    (err) => {
+      console.warn('Error listening to user doc for contact sync:', err);
+    }
+  );
+
+  // Initial sync with any legacy ids passed in
+  legacyContactIds.forEach((id) => {
+    if (id && id !== currentUserId) {
+      syncContactUserDoc(id);
+    }
   });
 
   return () => {
-    unsubscribers.forEach((u) => u());
+    unsubContactsColl();
+    unsubUserDoc();
+    for (const unsub of contactUserUnsubs.values()) {
+      unsub();
+    }
+    contactUserUnsubs.clear();
+    contactsMap.clear();
   };
 }

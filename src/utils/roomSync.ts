@@ -1,4 +1,4 @@
-import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, deleteDoc, onSnapshot, query, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Room } from '../types';
 
@@ -44,9 +44,9 @@ export function subscribeRoomsRealtime(
 ): () => void {
   const path = 'rooms';
   try {
-    const roomsCol = collection(db, path);
+    const roomsQuery = query(collection(db, path), limit(60));
     const unsubscribe = onSnapshot(
-      roomsCol,
+      roomsQuery,
       (snapshot) => {
         const roomsList: Room[] = [];
         snapshot.forEach((docSnap) => {

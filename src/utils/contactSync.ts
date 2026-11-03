@@ -7,6 +7,7 @@ import {
   onSnapshot, 
   query, 
   where, 
+  limit,
   arrayUnion, 
   arrayRemove, 
   deleteDoc 
@@ -136,7 +137,8 @@ export function subscribeIncomingContactRequests(
   const q = query(
     collection(db, 'contact_requests'),
     where('receiverId', '==', userId),
-    where('status', '==', 'pending')
+    where('status', '==', 'pending'),
+    limit(50)
   );
 
   return onSnapshot(
@@ -164,7 +166,8 @@ export function subscribeSentContactRequests(
   const q = query(
     collection(db, 'contact_requests'),
     where('senderId', '==', userId),
-    where('status', '==', 'pending')
+    where('status', '==', 'pending'),
+    limit(50)
   );
 
   return onSnapshot(
@@ -426,7 +429,8 @@ export function subscribeUserContactsRealtime(
   const contactsQuery = query(
     collection(db, 'contacts'),
     where('userId', '==', currentUserId),
-    where('status', '==', 'active')
+    where('status', '==', 'active'),
+    limit(100)
   );
 
   const unsubContactsColl = onSnapshot(
@@ -458,6 +462,9 @@ export function subscribeUserContactsRealtime(
     }
   );
 
+  // In-memory set of verified backfill contacts to avoid repeat getDoc reads on every snapshot
+  const verifiedBackfillIds = new Set<string>();
+
   // 2. Also listen to user's profile document to auto-migrate any legacy contacts array
   const userDocRef = doc(db, 'users', currentUserId);
   const unsubUserDoc = onSnapshot(
@@ -471,20 +478,23 @@ export function subscribeUserContactsRealtime(
           if (contactId && contactId !== currentUserId) {
             syncContactUserDoc(contactId);
 
-            // Auto-backfill permanent document in /contacts if not present
+            // Check at most once per session to eliminate quota drain
             const permanentId = `${currentUserId}_${contactId}`;
-            getDoc(doc(db, 'contacts', permanentId)).then((permSnap) => {
-              if (!permSnap.exists()) {
-                setDoc(doc(db, 'contacts', permanentId), {
-                  id: permanentId,
-                  userId: currentUserId,
-                  contactId,
-                  status: 'active',
-                  createdAt: Date.now(),
-                  updatedAt: Date.now(),
-                }, { merge: true }).catch(() => {});
-              }
-            }).catch(() => {});
+            if (!verifiedBackfillIds.has(permanentId)) {
+              verifiedBackfillIds.add(permanentId);
+              getDoc(doc(db, 'contacts', permanentId)).then((permSnap) => {
+                if (!permSnap.exists()) {
+                  setDoc(doc(db, 'contacts', permanentId), {
+                    id: permanentId,
+                    userId: currentUserId,
+                    contactId,
+                    status: 'active',
+                    createdAt: Date.now(),
+                    updatedAt: Date.now(),
+                  }, { merge: true }).catch(() => {});
+                }
+              }).catch(() => {});
+            }
           }
         });
       }

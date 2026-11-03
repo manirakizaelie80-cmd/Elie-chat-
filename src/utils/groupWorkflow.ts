@@ -7,6 +7,7 @@ import {
   onSnapshot, 
   query, 
   where, 
+  limit,
   arrayUnion, 
   arrayRemove 
 } from 'firebase/firestore';
@@ -123,7 +124,8 @@ export function subscribeUserInvitations(
   const q = query(
     collection(db, 'group_invitations'),
     where('inviteeId', '==', userId),
-    where('status', '==', 'pending')
+    where('status', '==', 'pending'),
+    limit(50)
   );
 
   return onSnapshot(q, (snapshot) => {
@@ -148,7 +150,8 @@ export function subscribeGroupPendingInvitations(
   const q = query(
     collection(db, 'group_invitations'),
     where('groupId', '==', groupId),
-    where('status', '==', 'pending')
+    where('status', '==', 'pending'),
+    limit(50)
   );
 
   return onSnapshot(q, (snapshot) => {
@@ -321,7 +324,8 @@ export function subscribeGroupJoinRequests(
   const q = query(
     collection(db, 'join_requests'),
     where('groupId', '==', groupId),
-    where('status', '==', 'pending')
+    where('status', '==', 'pending'),
+    limit(50)
   );
 
   return onSnapshot(q, (snapshot) => {
@@ -345,7 +349,8 @@ export function subscribeUserJoinRequests(
 ): () => void {
   const q = query(
     collection(db, 'join_requests'),
-    where('requesterId', '==', userId)
+    where('requesterId', '==', userId),
+    limit(50)
   );
 
   return onSnapshot(q, (snapshot) => {

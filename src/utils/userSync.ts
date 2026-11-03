@@ -79,19 +79,19 @@ export function computeUserLiveStatus(
 
   const diffMs = now - lastActive;
 
-  // Active within 35 seconds (heartbeat interval is 15-20s)
-  if (diffMs < 35000) {
+  // Active within 75 seconds (relaxed heartbeat interval is 45-50s to conserve write quota)
+  if (diffMs < 75000) {
     if (user.status === 'busy') return { status: 'busy', isOnline: true };
     if (user.status === 'away') return { status: 'away', isOnline: true };
     return { status: 'online', isOnline: true };
   }
 
-  // Idle / backgrounded: between 35s and 90s
-  if (diffMs < 90000) {
+  // Idle / backgrounded: between 75s and 160s
+  if (diffMs < 160000) {
     return { status: 'away', isOnline: true };
   }
 
-  // Inactive / disconnected: past 90 seconds
+  // Inactive / disconnected: past 160 seconds
   return { status: 'offline', isOnline: false };
 }
 
@@ -171,9 +171,9 @@ export function countOnlineUsers(users: User[], now: number = Date.now()): numbe
 export function formatLastSeen(lastActiveOrSeen?: number, now: number = Date.now()): string {
   if (!lastActiveOrSeen) return 'Offline';
   const diffSec = Math.max(0, Math.floor((now - lastActiveOrSeen) / 1000));
-  if (diffSec < 20) return 'Active just now';
-  if (diffSec < 45) return 'Active now';
-  if (diffSec < 60) return 'Last seen just now';
+  if (diffSec < 40) return 'Active just now';
+  if (diffSec < 75) return 'Active now';
+  if (diffSec < 120) return 'Last seen just now';
   const diffMin = Math.floor(diffSec / 60);
   if (diffMin < 60) return `Last seen ${diffMin}m ago`;
   const diffHours = Math.floor(diffMin / 60);

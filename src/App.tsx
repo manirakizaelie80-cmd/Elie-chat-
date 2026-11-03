@@ -318,6 +318,7 @@ export default function App() {
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
   const activeWebRTCSessionRef = useRef<ActiveWebRTCSession | null>(null);
   const peerMeshRef = useRef<PeerMeshManager | null>(null);
+  const hasSeededRoomsRef = useRef(false);
 
   // Handlers for Contact Requests & Blocking
   const handleAcceptContactRequest = async (request: ContactRequest) => {
@@ -432,13 +433,15 @@ export default function App() {
     setIsCameraOff(false);
   }, [currentCall]);
 
-  // Real-Time Firestore Presence: Heartbeat and disconnect handling
+  // Real-Time Firestore Presence: Heartbeat and disconnect handling (throttled to 50s to conserve write quota)
   useEffect(() => {
     saveUserRealtime(currentUser, selfPeerId).catch(console.error);
 
     const interval = setInterval(() => {
+      // Throttle heartbeat when tab is hidden to save quota
+      if (document.hidden) return;
       saveUserRealtime(currentUser, selfPeerId).catch(console.error);
-    }, 20000);
+    }, 50000);
 
     const handleBeforeUnload = () => {
       saveUserRealtime({ ...currentUser, status: 'offline' }, selfPeerId).catch(() => {});
@@ -485,13 +488,16 @@ export default function App() {
   // Real-Time Firestore Subscription: Channels & Groups
   useEffect(() => {
     const unsubscribe = subscribeRoomsRealtime((firestoreRooms) => {
-      // Ensure all default rooms are seeded to Firestore
-      const existingIds = new Set(firestoreRooms.map((r) => r.id));
-      DEFAULT_ROOMS.forEach((r) => {
-        if (!existingIds.has(r.id)) {
-          saveRoomRealtime(r).catch(console.error);
-        }
-      });
+      // Seed missing default rooms at most once per session to eliminate write loops
+      if (!hasSeededRoomsRef.current && firestoreRooms.length > 0) {
+        hasSeededRoomsRef.current = true;
+        const existingIds = new Set(firestoreRooms.map((r) => r.id));
+        DEFAULT_ROOMS.forEach((r) => {
+          if (!existingIds.has(r.id)) {
+            saveRoomRealtime(r).catch(console.error);
+          }
+        });
+      }
 
       setRooms(() => {
         const map = new Map<string, Room>();

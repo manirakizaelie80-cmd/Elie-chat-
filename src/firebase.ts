@@ -1,12 +1,35 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { 
+  getFirestore, 
+  initializeFirestore, 
+  persistentLocalCache, 
+  persistentMultipleTabManager,
+  doc, 
+  getDocFromServer 
+} from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
-// CRITICAL: Must pass database ID as second parameter
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+
+let firestoreDb;
+try {
+  firestoreDb = initializeFirestore(
+    app, 
+    {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager(),
+      }),
+    }, 
+    firebaseConfig.firestoreDatabaseId
+  );
+} catch {
+  // If already initialized (e.g. across reloads), gracefully fallback to existing instance
+  firestoreDb = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+}
+
+export const db = firestoreDb;
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 

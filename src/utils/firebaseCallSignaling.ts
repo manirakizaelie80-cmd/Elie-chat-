@@ -7,7 +7,8 @@ import {
   onSnapshot, 
   addDoc, 
   query, 
-  where 
+  where,
+  limit 
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { CallSession, User } from '../types';
@@ -35,7 +36,8 @@ export function subscribeIncomingCalls(
     const q = query(
       collection(db, path),
       where('receiverId', '==', currentUserId),
-      where('status', '==', 'calling')
+      where('status', '==', 'calling'),
+      limit(10)
     );
 
     const unsubscribe = onSnapshot(

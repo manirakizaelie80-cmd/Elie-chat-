@@ -9,7 +9,8 @@ import {
   where, 
   orderBy,
   limit, 
-  arrayUnion 
+  arrayUnion,
+  writeBatch
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Message } from '../types';
@@ -63,7 +64,7 @@ export function subscribeConversationMessages(
     const q = query(
       collection(db, path),
       where('conversationId', '==', conversationId),
-      limit(250)
+      limit(75)
     );
 
     const unsubscribe = onSnapshot(
@@ -122,7 +123,7 @@ export function subscribeAllMessagesRealtime(
     const q = query(
       collection(db, path),
       orderBy('timestamp', 'desc'),
-      limit(300)
+      limit(50)
     );
 
     const unsubscribe = onSnapshot(
@@ -172,53 +173,73 @@ export function subscribeAllMessagesRealtime(
   }
 }
 
-// Mark messages as delivered when recipient's client synchronizes them
+// In-memory sets to prevent redundant repeated writes in the same session and save write quota
+const processedDeliveryIds = new Set<string>();
+const processedReadIds = new Set<string>();
+
+// Mark messages as delivered in a single batch without duplicate writes
 export async function markMessagesAsDeliveredRealtime(
   messages: Message[],
   currentUserId: string
 ): Promise<void> {
   const undelivered = messages.filter(
-    (m) => m.senderId !== currentUserId && m.status === 'sent'
+    (m) => m.senderId !== currentUserId && m.status === 'sent' && !processedDeliveryIds.has(m.id)
   );
+  if (undelivered.length === 0) return;
 
-  for (const m of undelivered) {
-    try {
-      await updateDoc(doc(db, 'messages', m.id), {
-        status: 'delivered',
-      });
-    } catch {
-      // ignore concurrent update
-    }
+  undelivered.forEach((m) => processedDeliveryIds.add(m.id));
+
+  // Batch commit up to 20 to preserve quota in one network write
+  const batch = writeBatch(db);
+  const toUpdate = undelivered.slice(0, 20);
+  toUpdate.forEach((m) => {
+    batch.update(doc(db, 'messages', m.id), { status: 'delivered' });
+  });
+
+  try {
+    await batch.commit();
+  } catch {
+    // ignore concurrent update
   }
 }
 
-// Mark messages as read when recipient opens and views the conversation
+// Mark messages as read in a single batch without duplicate writes
 export async function markMessagesAsReadRealtime(
   messages: Message[],
   currentUserId: string,
   readReceiptsEnabled: boolean = true
 ): Promise<void> {
   const unreadMessages = messages.filter(
-    (m) => m.senderId !== currentUserId && (!m.readBy || !m.readBy.includes(currentUserId))
+    (m) =>
+      m.senderId !== currentUserId &&
+      (!m.readBy || !m.readBy.includes(currentUserId)) &&
+      !processedReadIds.has(m.id)
   );
+  if (unreadMessages.length === 0) return;
 
-  for (const m of unreadMessages) {
-    try {
-      const updates: Record<string, any> = {
-        readBy: arrayUnion(currentUserId),
-      };
+  unreadMessages.forEach((m) => processedReadIds.add(m.id));
 
-      if (readReceiptsEnabled) {
-        updates.status = 'read';
-        updates.readAt = Date.now();
-      } else if (m.status === 'sent') {
-        updates.status = 'delivered';
-      }
+  const batch = writeBatch(db);
+  const toUpdate = unreadMessages.slice(0, 20);
+  toUpdate.forEach((m) => {
+    const updates: Record<string, any> = {
+      readBy: arrayUnion(currentUserId),
+    };
 
-      await updateDoc(doc(db, 'messages', m.id), updates);
-    } catch {
-      // ignore concurrent update
+    if (readReceiptsEnabled) {
+      updates.status = 'read';
+      updates.readAt = Date.now();
+    } else if (m.status === 'sent') {
+      updates.status = 'delivered';
     }
+
+    batch.update(doc(db, 'messages', m.id), updates);
+  });
+
+  try {
+    await batch.commit();
+  } catch {
+    // ignore concurrent update
   }
 }
 

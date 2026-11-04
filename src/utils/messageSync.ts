@@ -57,14 +57,15 @@ export async function saveMessageRealtime(message: Message): Promise<void> {
 
 export function subscribeConversationMessages(
   conversationId: string,
-  onMessagesUpdate: (messages: Message[]) => void
+  onMessagesUpdate: (messages: Message[]) => void,
+  messageLimit: number = 30
 ): () => void {
   const path = 'messages';
   try {
     const q = query(
       collection(db, path),
       where('conversationId', '==', conversationId),
-      limit(75)
+      limit(messageLimit)
     );
 
     const unsubscribe = onSnapshot(
@@ -116,14 +117,15 @@ export function subscribeConversationMessages(
 }
 
 export function subscribeAllMessagesRealtime(
-  onMessagesUpdate: (messages: Message[]) => void
+  onMessagesUpdate: (messages: Message[]) => void,
+  messageLimit: number = 35
 ): () => void {
   const path = 'messages';
   try {
     const q = query(
       collection(db, path),
       orderBy('timestamp', 'desc'),
-      limit(50)
+      limit(messageLimit)
     );
 
     const unsubscribe = onSnapshot(

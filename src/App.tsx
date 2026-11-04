@@ -24,6 +24,7 @@ import {
   InAppNotification,
   ContactRequest
 } from './types';
+import { subscribeQuotaStatus, QuotaStatus } from './firebase';
 import { PeerMeshManager } from './utils/peerMesh';
 import { getUserMediaSafe } from './utils/mediaFallback';
 import { saveUserRealtime, countOnlineUsers } from './utils/userSync';
@@ -260,6 +261,9 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [activeCalls, setActiveCalls] = useState<ActiveCall[]>([]);
+  const [messagePageSize, setMessagePageSize] = useState<number>(30);
+  const [isLoadingEarlierMessages, setIsLoadingEarlierMessages] = useState<boolean>(false);
+  const [quotaStatus, setQuotaStatus] = useState<QuotaStatus>({ isQuotaExhausted: false, message: '' });
 
   // Live Real-Time Timestamp & Presence Ticker (every 2.5s)
   const [liveNow, setLiveNow] = useState(() => Date.now());
@@ -533,6 +537,27 @@ export default function App() {
     };
   }, [currentUser.id]);
 
+  // Reset message pagination when switching rooms or peers
+  useEffect(() => {
+    setMessagePageSize(30);
+  }, [activeRoomId, activeDirectUserId]);
+
+  // Subscribe to Firestore Quota status
+  useEffect(() => {
+    const unsub = subscribeQuotaStatus((status) => {
+      setQuotaStatus(status);
+    });
+    return () => unsub();
+  }, []);
+
+  const handleLoadEarlierMessages = useCallback(() => {
+    setIsLoadingEarlierMessages(true);
+    setMessagePageSize((prev) => prev + 25);
+    setTimeout(() => {
+      setIsLoadingEarlierMessages(false);
+    }, 400);
+  }, []);
+
   // Real-Time Firestore Subscription: Messages for currently open conversation
   useEffect(() => {
     const isGroup = activeDirectUserId === null;
@@ -575,13 +600,14 @@ export default function App() {
           currentUser.id, 
           currentUser.readReceiptsEnabled !== false
         ).catch(console.error);
-      }
+      },
+      messagePageSize
     );
 
     return () => {
       unsubscribe();
     };
-  }, [activeRoomId, activeDirectUserId, currentUser.id, currentUser.readReceiptsEnabled, rooms, pendingInvitations]);
+  }, [activeRoomId, activeDirectUserId, currentUser.id, currentUser.readReceiptsEnabled, rooms, pendingInvitations, messagePageSize]);
 
   // Real-Time Firestore Subscription: Track all messages & unread counts
   useEffect(() => {
@@ -1279,6 +1305,24 @@ export default function App() {
         contactsCount={users.filter((u) => u.id !== currentUser.id).length}
       />
 
+      {/* Firestore Spark Free Quota Status Notification */}
+      {quotaStatus.isQuotaExhausted && (
+        <div className="bg-amber-950/90 border-b border-amber-500/40 px-4 py-2 text-xs text-amber-200 flex items-center justify-between gap-3 shrink-0 z-30 animate-fadeIn">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />
+            <span>
+              <strong>Free Quota Saver Mode Active:</strong> Daily Firestore read/write limit reached. Your local contacts, rooms, and cached messages remain accessible offline.
+            </span>
+          </div>
+          <button
+            onClick={() => setQuotaStatus({ isQuotaExhausted: false, message: '' })}
+            className="text-amber-400 hover:text-white px-2.5 py-0.5 rounded text-[11px] font-medium bg-amber-900/50 hover:bg-amber-800 transition-colors shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Main App Workspace */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Real-time Sidebar with Channels, Direct Peers, and Unread Counts */}
@@ -1383,6 +1427,9 @@ export default function App() {
               }
               pendingInvitation={activeRoomId ? pendingInvitations.find((inv) => inv.groupId === activeRoomId) : undefined}
               onRespondInvitation={handleRespondInvitation}
+              hasMoreMessages={filteredMessages.length >= messagePageSize}
+              onLoadEarlierMessages={handleLoadEarlierMessages}
+              isLoadingEarlier={isLoadingEarlierMessages}
             />
           </div>
         )}

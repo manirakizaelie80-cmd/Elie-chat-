@@ -90,6 +90,9 @@ interface ChatAreaProps {
   hasPendingJoinRequest?: boolean;
   pendingInvitation?: GroupInvitation;
   onRespondInvitation?: (inv: GroupInvitation, accept: boolean) => void;
+  hasMoreMessages?: boolean;
+  onLoadEarlierMessages?: () => void;
+  isLoadingEarlier?: boolean;
 }
 
 const COMMON_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '🚀', '👀'];
@@ -130,6 +133,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   hasPendingJoinRequest = false,
   pendingInvitation,
   onRespondInvitation,
+  hasMoreMessages = false,
+  onLoadEarlierMessages,
+  isLoadingEarlier = false,
 }) => {
   const isRoom = Boolean(currentRoom);
   const [inputText, setInputText] = useState('');
@@ -169,21 +175,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const typingTimeoutRef = useRef<any>(null);
+  const lastTypingSentRef = useRef<number>(0);
 
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, typingUsers.length]);
 
-  // Handle typing debounce
+  // Handle typing debounce with 3-second throttle to conserve write quota
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInputText(e.target.value);
-    onSendTyping(true);
+    const now = Date.now();
+    if (now - lastTypingSentRef.current > 3000) {
+      lastTypingSentRef.current = now;
+      onSendTyping(true);
+    }
 
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
       onSendTyping(false);
-    }, 2000);
+      lastTypingSentRef.current = 0;
+    }, 2500);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -981,12 +993,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </p>
           </div>
         ) : (
-          messages.map((msg) => {
-            const isMe = msg.senderId === currentUser.id;
-            const timeString = new Date(msg.timestamp).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            });
+          <>
+            {hasMoreMessages && onLoadEarlierMessages && (
+              <div className="flex justify-center pb-2 pt-1">
+                <button
+                  type="button"
+                  onClick={onLoadEarlierMessages}
+                  disabled={isLoadingEarlier}
+                  className="px-3.5 py-1.5 bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full text-[11px] font-medium border border-slate-700/60 transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                >
+                  {isLoadingEarlier ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+                      <span>Loading earlier messages...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>↑ Load earlier messages</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+            {messages.map((msg) => {
+              const isMe = msg.senderId === currentUser.id;
+              const timeString = new Date(msg.timestamp).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              });
 
             return (
               <div
@@ -1270,7 +1304,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               </div>
             );
-          })
+          })}
+          </>
         )}
         <div ref={messagesEndRef} />
       </div>

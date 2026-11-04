@@ -31,7 +31,8 @@ import {
   Lock,
   UserPlus,
   Clock,
-  Camera
+  Camera,
+  Maximize2
 } from 'lucide-react';
 import { Message, User, Room, GroupInvitation } from '../types';
 import { formatLastSeen } from '../utils/userSync';
@@ -143,7 +144,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const [attachedQueue, setAttachedQueue] = useState<QueuedMediaItem[]>([]);
   const [isPendingAutoSend, setIsPendingAutoSend] = useState(false);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [activeMediaModal, setActiveMediaModal] = useState<{
+    url: string;
+    type: 'video' | 'image';
+    fileName?: string;
+    fileSize?: number;
+  } | null>(null);
+
+  // Close media modal on Escape key
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && activeMediaModal) {
+        setActiveMediaModal(null);
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [activeMediaModal]);
+
   const pendingSendRef = useRef<{
     text: string;
     replyTo?: { id: string; senderName: string; text: string };
@@ -699,25 +717,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
       )}
-      {/* Image Preview Lightbox */}
-      {previewImageUrl && (
-        <div 
-          onClick={() => setPreviewImageUrl(null)}
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 cursor-pointer animate-in fade-in"
-        >
-          <button 
-            onClick={() => setPreviewImageUrl(null)}
-            className="absolute top-4 right-4 p-2 text-white bg-slate-800/80 rounded-full hover:bg-slate-700"
-          >
-            <X className="w-5 h-5" />
-          </button>
-          <img 
-            src={previewImageUrl} 
-            alt="Enlarged preview" 
-            className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg"
-          />
-        </div>
-      )}
+
 
       {/* Chat Header */}
       <div className="h-14 border-b border-slate-800 px-3 md:px-4 flex items-center justify-between bg-slate-900/60 shrink-0 z-10">
@@ -1076,20 +1076,54 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     {msg.mediaUrl && (
                       <div className="mb-2 overflow-hidden rounded-xl">
                         {msg.mediaType === 'video' ? (
-                          <div className="rounded-xl overflow-hidden bg-black/95 shadow-md">
-                            <video
-                              src={msg.mediaUrl}
-                              controls
-                              playsInline
-                              preload="metadata"
-                              className="max-h-72 w-full rounded-xl object-contain bg-black"
-                            />
-                            {msg.fileName && (
-                              <div className="px-2.5 py-1.5 bg-slate-900/95 text-[10px] text-slate-300 flex items-center justify-between border-t border-slate-800">
-                                <span className="truncate max-w-[200px] font-medium">{msg.fileName}</span>
-                                {msg.fileSize && <span className="opacity-75">{formatBytes(msg.fileSize)}</span>}
+                          <div className="rounded-xl overflow-hidden bg-black shadow-lg border border-slate-700/60 group/vid">
+                            <div className="relative bg-black flex items-center justify-center">
+                              <video
+                                src={msg.mediaUrl}
+                                controls
+                                playsInline
+                                preload="metadata"
+                                className="max-h-80 w-full rounded-t-xl object-contain bg-black"
+                              />
+                            </div>
+                            <div className="px-3 py-2 bg-slate-900/95 text-[11px] text-slate-300 flex items-center justify-between border-t border-slate-800 gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <Film className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                                <span className="truncate font-medium text-slate-200">{msg.fileName || 'Video'}</span>
+                                {msg.fileSize && (
+                                  <span className="text-[10px] text-slate-400 shrink-0 font-mono">
+                                    · {formatBytes(msg.fileSize)}
+                                  </span>
+                                )}
                               </div>
-                            )}
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setActiveMediaModal({
+                                      url: msg.mediaUrl!,
+                                      type: 'video',
+                                      fileName: msg.fileName,
+                                      fileSize: msg.fileSize,
+                                    })
+                                  }
+                                  title="Expand / Fullscreen player"
+                                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                                >
+                                  <Maximize2 className="w-3.5 h-3.5" />
+                                </button>
+                                <a
+                                  href={msg.mediaUrl}
+                                  download={msg.fileName || `video_${msg.id}.mp4`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="Download video"
+                                  className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                </a>
+                              </div>
+                            </div>
                           </div>
                         ) : msg.mediaType === 'file' ? (
                           <a
@@ -1124,9 +1158,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                               alt={msg.fileName || 'Attachment'}
                               loading="lazy"
                               className="max-h-72 rounded-xl object-cover w-full hover:opacity-95 transition-opacity cursor-pointer shadow-md"
-                              onClick={() => setPreviewImageUrl(msg.mediaUrl!)}
+                              onClick={() =>
+                                setActiveMediaModal({
+                                  url: msg.mediaUrl!,
+                                  type: 'image',
+                                  fileName: msg.fileName,
+                                  fileSize: msg.fileSize,
+                                })
+                              }
                             />
                             <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setActiveMediaModal({
+                                    url: msg.mediaUrl!,
+                                    type: 'image',
+                                    fileName: msg.fileName,
+                                    fileSize: msg.fileSize,
+                                  })
+                                }
+                                className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white shadow-md backdrop-blur-sm transition-colors"
+                                title="Expand image"
+                              >
+                                <Maximize2 className="w-3.5 h-3.5" />
+                              </button>
                               <a
                                 href={msg.mediaUrl}
                                 download={msg.fileName || `photo_${msg.id}.jpg`}
@@ -1397,8 +1453,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       />
                     )}
                     {item.type === 'video' && (
-                      <div className="w-11 h-11 rounded-lg bg-indigo-950/60 border border-indigo-800 flex items-center justify-center shrink-0">
-                        <Film className="w-5 h-5 text-indigo-400" />
+                      <div className="relative w-11 h-11 rounded-lg overflow-hidden bg-black border border-indigo-700/80 shrink-0 flex items-center justify-center">
+                        <video
+                          src={item.previewUrl}
+                          className="w-full h-full object-cover"
+                          muted
+                          playsInline
+                          preload="metadata"
+                        />
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center pointer-events-none">
+                          <Play className="w-3.5 h-3.5 text-white fill-white/80" />
+                        </div>
                       </div>
                     )}
                     {item.type === 'file' && (
@@ -1563,7 +1628,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <input
                   type="file"
                   ref={videoInputRef}
-                  accept="video/*"
+                  accept="video/*,video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv,.m4v"
+                  multiple
                   onChange={handleFileUpload}
                   className="hidden"
                 />
@@ -1707,6 +1773,80 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Check className="w-3.5 h-3.5" />
               <span>Accept & Join</span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen Video & Image Theater Modal */}
+      {activeMediaModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col items-center justify-center p-3 sm:p-6"
+          onClick={() => setActiveMediaModal(null)}
+        >
+          {/* Top Bar with Media Title, Download & Close */}
+          <div
+            className="w-full max-w-4xl flex items-center justify-between pb-3 text-slate-200 border-b border-slate-800/80 mb-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="p-1.5 rounded-lg bg-indigo-950/80 border border-indigo-800 text-indigo-400">
+                {activeMediaModal.type === 'video' ? <Film className="w-4 h-4" /> : <ImageIcon className="w-4 h-4" />}
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs sm:text-sm font-semibold truncate text-white">
+                  {activeMediaModal.fileName || (activeMediaModal.type === 'video' ? 'Video Player' : 'Image Preview')}
+                </p>
+                {activeMediaModal.fileSize && (
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {formatBytes(activeMediaModal.fileSize)}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <a
+                href={activeMediaModal.url}
+                download={activeMediaModal.fileName || (activeMediaModal.type === 'video' ? 'video.mp4' : 'image.jpg')}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Download file"
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium flex items-center gap-1.5 border border-slate-700 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Download</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => setActiveMediaModal(null)}
+                className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors"
+                title="Close (Esc)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Media Player Container */}
+          <div
+            className="w-full max-w-4xl max-h-[82vh] flex items-center justify-center overflow-hidden rounded-2xl bg-black/90 shadow-2xl border border-slate-800 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {activeMediaModal.type === 'video' ? (
+              <video
+                src={activeMediaModal.url}
+                controls
+                autoPlay
+                playsInline
+                className="max-h-[80vh] w-full object-contain rounded-xl"
+              />
+            ) : (
+              <img
+                src={activeMediaModal.url}
+                alt={activeMediaModal.fileName || 'Preview'}
+                className="max-h-[80vh] max-w-full object-contain rounded-xl"
+              />
+            )}
           </div>
         </div>
       )}

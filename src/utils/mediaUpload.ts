@@ -49,13 +49,30 @@ export function detectMediaType(file: File): 'image' | 'video' | 'file' | 'audio
   if (type.startsWith('image/') || /\.(jpe?g|png|webp|gif|svg|avif|bmp)$/i.test(name)) {
     return 'image';
   }
-  if (type.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi|m4v|3gp)$/i.test(name)) {
+  if (type.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi|m4v|3gp|flv|wmv)$/i.test(name)) {
     return 'video';
   }
   if (type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|webm|opus)$/i.test(name)) {
     return 'audio';
   }
   return 'file';
+}
+
+/**
+ * Returns accurate video MIME type for frictionless cross-platform video streaming
+ */
+export function getAccurateVideoMimeType(file: File): string {
+  if (file.type && file.type.startsWith('video/') && file.type !== 'application/octet-stream') {
+    return file.type;
+  }
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.mp4') || name.endsWith('.m4v')) return 'video/mp4';
+  if (name.endsWith('.webm')) return 'video/webm';
+  if (name.endsWith('.mov')) return 'video/quicktime';
+  if (name.endsWith('.mkv')) return 'video/x-matroska';
+  if (name.endsWith('.avi')) return 'video/x-msvideo';
+  if (name.endsWith('.3gp')) return 'video/3gpp';
+  return 'video/mp4';
 }
 
 /**
@@ -403,6 +420,10 @@ export function uploadChatMediaWithHandle(params: {
       mediaType,
     };
 
+    const determinedContentType = mediaType === 'video'
+      ? getAccurateVideoMimeType(fileToUpload)
+      : (fileToUpload.type || 'application/octet-stream');
+
     let downloadUrl = '';
 
     // FAST-PATH: If file is an image/file <= 2.5MB, use direct single-roundtrip uploadBytes!
@@ -429,7 +450,7 @@ export function uploadChatMediaWithHandle(params: {
           }
 
           const snapshot = await uploadBytes(storageRef, fileToUpload, {
-            contentType: fileToUpload.type || 'application/octet-stream',
+            contentType: determinedContentType,
             customMetadata,
           });
 
@@ -461,7 +482,7 @@ export function uploadChatMediaWithHandle(params: {
           // RESUMABLE PATH for files > 2.5MB:
           // Supports progress events, pausing, and network drop recovery
           const uploadTask = uploadBytesResumable(storageRef, fileToUpload, {
-            contentType: fileToUpload.type || 'application/octet-stream',
+            contentType: determinedContentType,
             customMetadata,
           });
           activeTask = uploadTask;

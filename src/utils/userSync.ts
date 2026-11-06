@@ -79,19 +79,19 @@ export function computeUserLiveStatus(
 
   const diffMs = now - lastActive;
 
-  // Active within 75 seconds (relaxed heartbeat interval is 45-50s to conserve write quota)
-  if (diffMs < 75000) {
+  // Active within 100 seconds (relaxed 65s heartbeat saves substantial daily write quota)
+  if (diffMs < 100000) {
     if (user.status === 'busy') return { status: 'busy', isOnline: true };
     if (user.status === 'away') return { status: 'away', isOnline: true };
     return { status: 'online', isOnline: true };
   }
 
-  // Idle / backgrounded: between 75s and 160s
-  if (diffMs < 160000) {
+  // Idle / backgrounded: between 100s and 220s
+  if (diffMs < 220000) {
     return { status: 'away', isOnline: true };
   }
 
-  // Inactive / disconnected: past 160 seconds
+  // Inactive / disconnected: past 220 seconds
   return { status: 'offline', isOnline: false };
 }
 

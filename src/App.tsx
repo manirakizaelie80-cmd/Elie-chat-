@@ -437,18 +437,50 @@ export default function App() {
     setIsCameraOff(false);
   }, [currentCall]);
 
-  // Real-Time Firestore Presence: Heartbeat and disconnect handling (throttled to 50s to conserve write quota)
+  const currentUserRef = useRef<User>(currentUser);
   useEffect(() => {
-    saveUserRealtime(currentUser, selfPeerId).catch(console.error);
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  const lastUserInteractionRef = useRef<number>(Date.now());
+  const lastPresenceSavedRef = useRef<number>(0);
+
+  // Track active user interactions to pause heartbeats when idle (> 2.5 min)
+  useEffect(() => {
+    const markActive = () => {
+      lastUserInteractionRef.current = Date.now();
+    };
+    window.addEventListener('mousemove', markActive, { passive: true });
+    window.addEventListener('keydown', markActive, { passive: true });
+    window.addEventListener('touchstart', markActive, { passive: true });
+    window.addEventListener('click', markActive, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', markActive);
+      window.removeEventListener('keydown', markActive);
+      window.removeEventListener('touchstart', markActive);
+      window.removeEventListener('click', markActive);
+    };
+  }, []);
+
+  // Real-Time Firestore Presence: Heartbeat throttled to 65s with Idle & Hidden Tab Sleep
+  useEffect(() => {
+    saveUserRealtime(currentUserRef.current, selfPeerId).catch(console.error);
+    lastPresenceSavedRef.current = Date.now();
 
     const interval = setInterval(() => {
-      // Throttle heartbeat when tab is hidden to save quota
+      // 1. Skip if browser tab is hidden/backgrounded
       if (document.hidden) return;
-      saveUserRealtime(currentUser, selfPeerId).catch(console.error);
-    }, 50000);
+      // 2. Skip if user has been idle (> 2.5 minutes) without mouse or key interaction
+      if (Date.now() - lastUserInteractionRef.current > 150000) return;
+      // 3. Minimum 58s throttle
+      if (Date.now() - lastPresenceSavedRef.current < 58000) return;
+
+      lastPresenceSavedRef.current = Date.now();
+      saveUserRealtime(currentUserRef.current, selfPeerId).catch(console.error);
+    }, 65000);
 
     const handleBeforeUnload = () => {
-      saveUserRealtime({ ...currentUser, status: 'offline' }, selfPeerId).catch(() => {});
+      saveUserRealtime({ ...currentUserRef.current, status: 'offline' }, selfPeerId).catch(() => {});
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
@@ -456,7 +488,7 @@ export default function App() {
       clearInterval(interval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [currentUser, selfPeerId]);
+  }, [currentUser.id, selfPeerId]);
 
   // Real-Time Firestore Presence & Contacts Subscription: Only approved contacts are loaded (Zero-Public-Discovery)
   useEffect(() => {

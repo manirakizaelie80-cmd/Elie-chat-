@@ -465,55 +465,32 @@ export function subscribeUserContactsRealtime(
   // In-memory set of verified backfill contacts to avoid repeat getDoc reads on every snapshot
   const verifiedBackfillIds = new Set<string>();
 
-  // 2. Also listen to user's profile document to auto-migrate any legacy contacts array
-  const userDocRef = doc(db, 'users', currentUserId);
-  const unsubUserDoc = onSnapshot(
-    userDocRef,
-    (snap) => {
-      if (snap.exists()) {
-        const userData = snap.data() as User;
-        const arrayContacts = userData.contacts || [];
+  // Initial one-time sync with any legacy ids passed in (no permanent onSnapshot listener on own profile)
+  legacyContactIds.forEach((contactId) => {
+    if (contactId && contactId !== currentUserId) {
+      syncContactUserDoc(contactId);
 
-        arrayContacts.forEach((contactId) => {
-          if (contactId && contactId !== currentUserId) {
-            syncContactUserDoc(contactId);
-
-            // Check at most once per session to eliminate quota drain
-            const permanentId = `${currentUserId}_${contactId}`;
-            if (!verifiedBackfillIds.has(permanentId)) {
-              verifiedBackfillIds.add(permanentId);
-              getDoc(doc(db, 'contacts', permanentId)).then((permSnap) => {
-                if (!permSnap.exists()) {
-                  setDoc(doc(db, 'contacts', permanentId), {
-                    id: permanentId,
-                    userId: currentUserId,
-                    contactId,
-                    status: 'active',
-                    createdAt: Date.now(),
-                    updatedAt: Date.now(),
-                  }, { merge: true }).catch(() => {});
-                }
-              }).catch(() => {});
-            }
+      const permanentId = `${currentUserId}_${contactId}`;
+      if (!verifiedBackfillIds.has(permanentId)) {
+        verifiedBackfillIds.add(permanentId);
+        getDoc(doc(db, 'contacts', permanentId)).then((permSnap) => {
+          if (!permSnap.exists()) {
+            setDoc(doc(db, 'contacts', permanentId), {
+              id: permanentId,
+              userId: currentUserId,
+              contactId,
+              status: 'active',
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            }, { merge: true }).catch(() => {});
           }
-        });
+        }).catch(() => {});
       }
-    },
-    (err) => {
-      console.warn('Error listening to user doc for contact sync:', err);
-    }
-  );
-
-  // Initial sync with any legacy ids passed in
-  legacyContactIds.forEach((id) => {
-    if (id && id !== currentUserId) {
-      syncContactUserDoc(id);
     }
   });
 
   return () => {
     unsubContactsColl();
-    unsubUserDoc();
     for (const unsub of contactUserUnsubs.values()) {
       unsub();
     }

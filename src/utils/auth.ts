@@ -28,6 +28,23 @@ googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
 
+// In-memory cache for user profiles to eliminate repeated auth reads (Task 9)
+const profileMemoryCache = new Map<string, { user: User; fetchedAt: number }>();
+
+export function getCachedUserProfile(uid: string): User | null {
+  const entry = profileMemoryCache.get(uid);
+  if (entry && Date.now() - entry.fetchedAt < 300000) {
+    return entry.user;
+  }
+  return null;
+}
+
+export function setCachedUserProfile(user: User) {
+  if (user && user.id) {
+    profileMemoryCache.set(user.id, { user, fetchedAt: Date.now() });
+  }
+}
+
 // Normalize username: lowercase, trim, strip leading @
 export function normalizeUsername(raw: string): string {
   return raw.trim().toLowerCase().replace(/^@+/, '');
@@ -292,10 +309,17 @@ export async function loginWithEmailOrUsername(
   try {
     const cred = await signInWithEmailAndPassword(auth, emailToUse, password);
     const uid = cred.user.uid;
+    const cached = getCachedUserProfile(uid);
+    if (cached) {
+      localStorage.setItem('syncwave_current_user', JSON.stringify(cached));
+      return cached;
+    }
+
     const userDoc = await getDoc(doc(db, 'users', uid));
     if (userDoc.exists()) {
       const u = userDoc.data() as User;
       const updated: User = { ...u, status: 'online', lastActive: Date.now() };
+      setCachedUserProfile(updated);
       localStorage.setItem('syncwave_current_user', JSON.stringify(updated));
       return updated;
     }

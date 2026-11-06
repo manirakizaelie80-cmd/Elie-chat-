@@ -118,7 +118,7 @@ export function subscribeConversationMessages(
 
 export function subscribeAllMessagesRealtime(
   onMessagesUpdate: (messages: Message[]) => void,
-  messageLimit: number = 35
+  messageLimit: number = 25
 ): () => void {
   const path = 'messages';
   try {
